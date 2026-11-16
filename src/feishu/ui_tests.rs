@@ -34,6 +34,10 @@ fn setup()->H {
     let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());let mut h=setup();
     h.app.show_page(TODO_PAGE);h.hover(H::local(250.0,70.0),1.0);h.click(H::local(79.0,109.0));
     assert!(h.app.feishu.editing.is_some());assert!(h.app.todos.items.is_empty());
+    assert!(h.app.is_editing(),"Cloud text entry must enable the native keyboard focus mode");
+    h.frame(vec![egui::Event::Text("输入测试".into())]);
+    assert!(h.shapes.iter().any(|s|matches!(&s.shape,egui::Shape::Text(t)if t.galley.text().contains("输入测试"))));
+    h.app.cancel_edit();assert!(h.app.feishu.editing.is_none());
 }
 
 #[test] fn queued_calendar_creation_stays_visible_without_a_cloud_response(){

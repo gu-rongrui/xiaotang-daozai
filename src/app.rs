@@ -1605,7 +1605,7 @@ impl App {
     }
 
     pub fn is_editing(&self) -> bool {
-        self.adding || self.editing.is_some() || self.todo_choosing || self.task_dialog.is_some() || self.calendar.draft.is_some() || self.settings_editing
+        self.adding || self.editing.is_some() || self.todo_choosing || self.task_dialog.is_some() || self.calendar.draft.is_some() || self.settings_editing || self.feishu.editing.is_some()
     }
 
     pub fn filter_todo_input(&mut self,input:&mut egui::RawInput) {
@@ -1657,6 +1657,7 @@ impl App {
     }
 
     pub(crate) fn cancel_edit(&mut self) {
+        self.feishu.editing=None;
         self.settings_editing=false;
         self.adding = false;
         self.editing = None;
