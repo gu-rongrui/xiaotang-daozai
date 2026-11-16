@@ -99,9 +99,7 @@ fn sync(store:&mut Store,api:&mut impl Api,month:NaiveDate)->Result<(),String>{
                 store.events.retain(|e|e.calendar!=id || parse_event_time(&e.raw["start_time"]).is_none_or(|(t,_)|t<start||t>=end));
                 for raw in items {
                     if text(raw,"event_id").is_empty(){continue;}
-                    let stamp=raw["start_time"].clone();
-                    store.events.retain(|e|!(e.calendar==id && e.raw["event_id"]==raw["event_id"] && e.raw["start_time"]==stamp));
-                    store.events.push(SavedEvent{calendar:id.clone(),raw:raw.clone()});
+                    store.merge_event(&id,raw.clone());
                 }
                 store.save()?;
             }
@@ -148,7 +146,7 @@ fn flush(store:&mut Store,api:&mut impl Api)->Result<(),String>{
                     store.tasks.retain(|v|text(v,"guid")!=guid);store.tasks.push(value);
                 }else{
                     let eid=text(&value,"event_id");if eid.is_empty(){return Err("飞书日程身份缺失，操作已保留".into());}
-                    store.events.retain(|e|e.calendar!=q.calendar||text(&e.raw,"event_id")!=eid);store.events.push(SavedEvent{calendar:q.calendar,raw:value});
+                    store.merge_event(&q.calendar,value);
                 }
                 store.queue.remove(index);store.save()?;
             },

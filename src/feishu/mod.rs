@@ -94,6 +94,11 @@ impl Store {
     pub fn calendar_writable(&self,id:&str)->bool {
         self.calendars.iter().any(|c|text(c,"calendar_id")==id && matches!(text(c,"role"),"owner"|"writer") && matches!(text(c,"type"),"primary"|"shared") && c["is_third_party"]!=true)
     }
+    pub fn merge_event(&mut self,calendar:&str,raw:Value){
+        let normal=text(&raw,"recurrence").is_empty() && text(&raw,"recurring_event_id").is_empty() && raw["is_exception"]!=true && text(&raw,"event_id").ends_with("_0");
+        self.events.retain(|e|e.calendar!=calendar || e.raw["event_id"]!=raw["event_id"] || !normal && e.raw["start_time"]!=raw["start_time"]);
+        self.events.push(SavedEvent{calendar:calendar.into(),raw});
+    }
     pub fn enqueue(&mut self,change:Change)->Result<(),String>{
         if !self.config.enabled || !self.config.writes || self.account.is_empty(){return Err("请先连接飞书并开启云端写入".into());}
         if self.queue.iter().any(|q|q.target==change.target && q.calendar==change.calendar && !q.target.is_empty()){
@@ -212,5 +217,13 @@ mod tests {
     #[test] fn exhausted_budget_stops_before_network(){
         let mut store=Store{config:Config{monthly_budget:4,..Default::default()},budget_month:Local::now().format("%Y-%m").to_string(),calls:4,..Default::default()};
         assert!(store.reserve_call().is_err());assert_eq!(store.calls,4);
+    }
+    #[test] fn moved_single_events_replace_old_cache_but_repeated_instances_stay_distinct(){
+        let mut s=Store::default();
+        s.merge_event("cal",json!({"event_id":"id_0","start_time":{"timestamp":"1"}}));
+        s.merge_event("cal",json!({"event_id":"id_0","start_time":{"timestamp":"2"}}));
+        assert_eq!(s.events.len(),1);assert_eq!(s.events[0].raw["start_time"]["timestamp"],"2");
+        for stamp in ["3","4"]{s.merge_event("cal",json!({"event_id":"repeat_0","recurrence":"FREQ=DAILY","start_time":{"timestamp":stamp}}));}
+        assert_eq!(s.events.len(),3);
     }
 }
