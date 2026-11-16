@@ -99,6 +99,17 @@ impl Store {
         self.events.retain(|e|e.calendar!=calendar || e.raw["event_id"]!=raw["event_id"] || !normal && e.raw["start_time"]!=raw["start_time"]);
         self.events.push(SavedEvent{calendar:calendar.into(),raw});
     }
+    pub fn view_tasks(&self)->Vec<Value>{
+        let mut tasks=self.tasks.clone();
+        for q in self.queue.iter().filter(|q|q.kind.starts_with("task-")){
+            let id=if q.target.is_empty(){q.id.as_str()}else{q.target.as_str()};
+            let mut task=tasks.iter().find(|t|text(t,"guid")==id).cloned().unwrap_or_else(||json!({"guid":id}));
+            for (key,value) in q.patch.as_object().into_iter().flatten(){if q.base.get(key)!=Some(value){task[key]=value.clone();}}
+            task["daozai_pending"]=json!(true);task["daozai_blocked"]=json!(q.blocked);
+            tasks.retain(|t|text(t,"guid")!=id);tasks.push(task);
+        }
+        tasks
+    }
     pub fn enqueue(&mut self,change:Change)->Result<(),String>{
         if !self.config.enabled || !self.config.writes || self.account.is_empty(){return Err("请先连接飞书并开启云端写入".into());}
         if self.queue.iter().any(|q|q.target==change.target && q.calendar==change.calendar && !q.target.is_empty()){
@@ -119,7 +130,7 @@ pub(crate) fn task_writable(v:&Value,account:&str)->bool {
         })
 }
 pub(crate) fn event_writable(v:&Value,calendar:&str)->bool {
-    text(v,"recurrence").is_empty() && text(v,"recurring_event_id").is_empty() && v["is_exception"]!=true && text(v,"event_id").ends_with("_0") && text(v,"organizer_calendar_id")==calendar
+    v["daozai_pending"]!=true && text(v,"recurrence").is_empty() && text(v,"recurring_event_id").is_empty() && v["is_exception"]!=true && text(v,"event_id").ends_with("_0") && text(v,"organizer_calendar_id")==calendar
 }
 
 // Compare only fields the user actually changed. Never reconstruct a cloud object from the UI model.
@@ -144,13 +155,22 @@ pub(crate) fn parse_event_time(v:&Value)->Option<(i64,bool)> {
 pub(crate) struct ViewEvent {pub meeting:crate::mail::Meeting,pub calendar:String,pub name:String,pub color:eframe::egui::Color32,pub raw:Value}
 impl Store {
     pub fn view_events(&self)->Vec<ViewEvent>{
-        self.events.iter().filter(|e|self.config.selected.contains(&e.calendar)).filter_map(|e|{
+        let mut events=self.events.clone();
+        for q in self.queue.iter().filter(|q|q.kind.starts_with("event-")){
+            let id=if q.target.is_empty(){q.id.as_str()}else{q.target.as_str()};
+            let mut raw=events.iter().find(|e|e.calendar==q.calendar&&text(&e.raw,"event_id")==id).map(|e|e.raw.clone()).unwrap_or_else(||json!({"event_id":id}));
+            for (key,value) in q.patch.as_object().into_iter().flatten(){if q.base.get(key)!=Some(value){raw[key]=value.clone();}}
+            raw["daozai_pending"]=json!(true);raw["daozai_blocked"]=json!(q.blocked);
+            events.retain(|e|e.calendar!=q.calendar||text(&e.raw,"event_id")!=id);events.push(SavedEvent{calendar:q.calendar.clone(),raw});
+        }
+        events.iter().filter(|e|self.config.selected.contains(&e.calendar)).filter_map(|e|{
             if text(&e.raw,"status")=="cancelled"{return None;}
             let (start,all_day)=parse_event_time(&e.raw["start_time"])?;let (end,_)=parse_event_time(&e.raw["end_time"])?;
             let cal=self.calendars.iter().find(|c|text(c,"calendar_id")==e.calendar)?;
             let color=e.raw["color"].as_i64().filter(|c|*c!=0 && *c!=-1).or_else(||cal["color"].as_i64()).unwrap_or(0x70a2ff);
             let color=if color<0 {0x70a2ff}else{color as u32};
-            Some(ViewEvent{meeting:crate::mail::Meeting{uid:format!("feishu|{}|{}|{start}",e.calendar,text(&e.raw,"event_id")),title:text(&e.raw,"summary").into(),start,end:Some(end),all_day,at:chrono::DateTime::from_timestamp(start,0)?.with_timezone(&Local).format("%m-%d %H:%M").to_string()},calendar:e.calendar.clone(),name:self.calendar_name(&e.calendar),color:eframe::egui::Color32::from_rgb((color>>16) as u8,(color>>8) as u8,color as u8),raw:e.raw.clone()})
+            let name=if e.raw["daozai_pending"]==true{format!("{} · {}",self.calendar_name(&e.calendar),if text(&e.raw,"daozai_blocked").is_empty(){"待同步"}else{"冲突"})}else{self.calendar_name(&e.calendar)};
+            Some(ViewEvent{meeting:crate::mail::Meeting{uid:format!("feishu|{}|{}|{start}",e.calendar,text(&e.raw,"event_id")),title:text(&e.raw,"summary").into(),start,end:Some(end),all_day,at:chrono::DateTime::from_timestamp(start,0)?.with_timezone(&Local).format("%m-%d %H:%M").to_string()},calendar:e.calendar.clone(),name,color:eframe::egui::Color32::from_rgb((color>>16) as u8,(color>>8) as u8,color as u8),raw:e.raw.clone()})
         }).collect()
     }
 }
@@ -211,6 +231,7 @@ mod tests {
         let id=change.id.clone();store.enqueue(change).unwrap();
         let restored=Store::load().unwrap();assert_eq!(restored.queue.len(),1);assert_eq!(restored.queue[0].id,id);
         assert!(!restored.queue[0].attempted);assert_eq!(restored.queue[0].patch["summary"],"offline draft");
+        assert_eq!(restored.view_tasks()[0]["summary"],"offline draft");assert_eq!(restored.view_tasks()[0]["daozai_pending"],true);
         store.config.writes=false;assert!(store.enqueue(Change::new("task-create","","",Value::Null,json!({"summary":"denied"}))).is_err());
         if let Some(old)=old{std::env::set_var("DAOZAI_DATA_DIR",old);}else{std::env::remove_var("DAOZAI_DATA_DIR");}
     }

@@ -88,7 +88,7 @@ impl App {
         });
     }
     pub(crate) fn page_feishu_todo(&mut self,c:&Card,env:&Env){
-        let tasks=self.feishu.store.tasks.clone();let total=tasks.len();let done=tasks.iter().filter(|t|text(t,"completed_at").parse::<i64>().unwrap_or(0)>0).count();
+        let tasks=self.feishu.store.view_tasks();let total=tasks.len();let done=tasks.iter().filter(|t|text(t,"completed_at").parse::<i64>().unwrap_or(0)>0).count();
         c.text(42.0,61.0,&format!("{done}/{total}"),theme::size::HERO,W::Bold,theme::WHITE,H::Left);
         c.text(42.0,78.0,"飞书 · 我负责的",theme::size::SMALL,W::Regular,theme::GRAY,H::Left);
         let hint=if self.feishu.error.is_empty(){&self.feishu.status}else{&self.feishu.error};
@@ -114,11 +114,11 @@ impl App {
         self.todo_first=self.todo_first.min(total.saturating_sub(3));
         for (i,t) in tasks.iter().skip(self.todo_first).take(3).enumerate(){
             let y=46.0+i as f32*23.0;let guid=text(t,"guid");let checked=text(t,"completed_at").parse::<i64>().unwrap_or(0)>0;
-            let pending=self.feishu.store.queue.iter().any(|q|q.target==guid);
+            let pending=t["daozai_pending"]==true;
             let editable=writable && task_writable(t,&self.feishu.store.account) && !pending;
             c.ring(211.0,y,5.0,1.2,if checked{theme::GREEN}else{theme::GRAY});if checked{paint::check(c,211.0,y,6.0,1.0,1.0,theme::GREEN);}
             c.centered_text(223.0,y,&c.fit(text(t,"summary"),10.0,W::Regular,119.0),10.0,W::Regular,if checked{theme::GRAY}else{theme::WHITE},H::Left);
-            c.centered_text(361.0,y,if pending{"…"}else if editable{"编辑"}else{"只读"},7.5,W::Regular,theme::BLUE,H::Center);
+            c.centered_text(361.0,y,if !text(t,"daozai_blocked").is_empty(){"冲突"}else if pending{"待同步"}else if editable{"编辑"}else{"只读"},7.5,W::Regular,theme::BLUE,H::Center);
             if c.hit(201.0,y-9.0,18.0,18.0,("feishu-toggle",guid)).clicked()&&editable{
                 let base=task_fields(t);let mut patch=base.clone();patch["completed_at"]=json!(if checked{"0".into()}else{chrono::Utc::now().timestamp_millis().to_string()});
                 self.feishu_send(Command::Queue(Change::new("task-update",guid,"",base,patch)));

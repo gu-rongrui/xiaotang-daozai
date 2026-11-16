@@ -36,6 +36,14 @@ fn setup()->H {
     assert!(h.app.feishu.editing.is_some());assert!(h.app.todos.items.is_empty());
 }
 
+#[test] fn queued_calendar_creation_stays_visible_without_a_cloud_response(){
+    let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());let mut h=setup();
+    h.app.feishu.store.queue.push(Change::new("event-create","","cal",serde_json::Value::Null,json!({"summary":"离线新日程","start_time":{"date":"2026-10-29"},"end_time":{"date":"2026-10-30"}})));
+    let events=h.app.feishu.store.view_events();assert_eq!(events.len(),2);
+    let draft=events.iter().find(|e|e.meeting.title=="离线新日程").unwrap();assert!(draft.name.ends_with("待同步"));
+    assert!(!event_writable(&draft.raw,&draft.calendar));
+}
+
 #[test]
 #[ignore="Export mock-data previews on request"]
 fn personal_ui_gallery(){
