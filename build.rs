@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 fn find_rc() -> Option<PathBuf> {
+    if let Some(rc)=env::var_os("RC").map(PathBuf::from).filter(|p|p.is_file()){return Some(rc);}
     let roots = [
         r"C:\Program Files (x86)\Windows Kits\10\bin",
         r"C:\Program Files\Windows Kits\10\bin",
@@ -33,7 +34,16 @@ fn main() {
     println!("cargo:rerun-if-changed=app.rc");
     println!("cargo:rerun-if-changed=assets/daozai.ico");
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-env-changed=RC");
+    println!("cargo:rerun-if-env-changed=DAOZAI_RESOURCE_FILE");
     if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
+        return;
+    }
+    // A precompiled resource also supports build environments that restrict nested SDK tools.
+    if let Some(resource)=env::var_os("DAOZAI_RESOURCE_FILE").map(PathBuf::from){
+        assert!(resource.is_absolute() && resource.is_file(),"DAOZAI_RESOURCE_FILE must name an existing absolute .res path");
+        println!("cargo:rerun-if-changed={}",resource.display());
+        println!("cargo:rustc-link-arg={}",resource.display());
         return;
     }
     let out = PathBuf::from(env::var("OUT_DIR").unwrap()).join("daozai.res");
@@ -47,9 +57,10 @@ fn main() {
         .arg(&out)
         .arg("app.rc")
         .status();
-    if !status.map(|s| s.success()).unwrap_or(false) {
-        println!("cargo:warning=rc.exe 编译 app.rc 失败");
-        return;
+    match status {
+        Ok(status) if status.success()=>{},
+        Ok(status)=>{println!("cargo:warning=rc.exe 编译 app.rc 失败：{status}");return;},
+        Err(error)=>{println!("cargo:warning=无法启动 rc.exe：{error}");return;},
     }
     println!("cargo:rustc-link-arg={}", out.display());
 }

@@ -2,13 +2,14 @@
 use eframe::egui;
 use std::{io::{Read, Write}, path::PathBuf, sync::{mpsc::{self, Receiver}, Arc, atomic::{AtomicBool, Ordering}}, time::{Duration, Instant}};
 
-const REPOSITORY: &str = "https://github.com/Renly1994/xiaotang-daozai";
-const API: &str = "https://api.github.com/repos/Renly1994/xiaotang-daozai/releases/latest";
-const RELEASES: &str = "https://github.com/Renly1994/xiaotang-daozai/releases/latest";
-const BACKUP_DOWNLOAD: &str = "https://pan.quark.cn/s/0a39b4e1f332";
+const REPOSITORY: &str = "https://github.com/gu-rongrui/xiaotang-daozai";
+const API: &str = "https://api.github.com/repos/gu-rongrui/xiaotang-daozai/releases/latest";
+const RELEASES: &str = "https://github.com/gu-rongrui/xiaotang-daozai/releases";
+const BACKUP_DOWNLOAD: &str = RELEASES;
 const STARTUP_DELAY: Duration = Duration::from_secs(10);
 const CHECK_INTERVAL: Duration = Duration::from_secs(24 * 3600);
 const RETRY_INTERVAL: Duration = Duration::from_secs(3600);
+const IN_APP_UPDATES: bool = false;
 
 #[derive(Clone, Debug)]
 struct Release { version: String, notes: String, page: String, package: Option<Package> }
@@ -120,11 +121,16 @@ impl State {
             }
         }
         // 复用主界面的低频轮询；只在实际检查时启动线程，不增加常驻计时线程。
-        if !cfg!(test) && self.should_check(Instant::now()) { self.begin_check(ctx, true, check); }
+        if IN_APP_UPDATES && !cfg!(test) && self.should_check(Instant::now()) { self.begin_check(ctx, true, check); }
         if self.rx.is_some() && !self.automatic_check { ctx.request_repaint_after(Duration::from_millis(100)); }
     }
 
     pub(crate) fn ui(&mut self, ui: &mut egui::Ui) {
+        if !IN_APP_UPDATES {
+            ui.label("个人定制版 · 请从个人版 Releases 手动下载安装更新");
+            ui.hyperlink_to("打开个人版发布页",RELEASES);
+            return;
+        }
         if ui.add_enabled(self.rx.is_none(), egui::Button::new("检查更新")).clicked() {
             self.begin_check(ui.ctx(), false, check);
         }
@@ -286,7 +292,7 @@ fn own_files_kb(dir: &std::path::Path) -> u32 {
 #[cfg(windows)]
 pub fn record_install_size() {
     use windows::{core::w, Win32::System::Registry::{RegGetValueW, RegSetKeyValueW, HKEY_CURRENT_USER, REG_DWORD, RRF_RT_REG_SZ}};
-    let key = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Daozai");
+    let key = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\DaozaiPersonal");
     let Some(dir) = std::env::current_exe().ok().and_then(|exe| exe.parent().map(PathBuf::from)) else { return };
     let mut buffer = [0u16; 1024];
     let mut size = (buffer.len() * 2) as u32;
@@ -378,7 +384,7 @@ fn release_info(value: &serde_json::Value, current: &str) -> Result<Option<Relea
 
 fn download(release: &Release, tx: &mpsc::Sender<Event>, cancel: &AtomicBool) -> Result<PathBuf, String> {
     let package = release.package.as_ref().ok_or("请通过浏览器下载此版本")?;
-    let root = std::env::var_os("LOCALAPPDATA").map(PathBuf::from).ok_or("无法找到更新缓存目录")?.join("Daozai/Updates");
+    let root = std::env::var_os("LOCALAPPDATA").map(PathBuf::from).ok_or("无法找到更新缓存目录")?.join("DaozaiPersonal/Updates");
     let work = root.join(format!("{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos()));
     std::fs::create_dir_all(&work).map_err(|_| "无法创建更新缓存")?;
     let result = (|| {

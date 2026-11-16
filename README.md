@@ -1,3 +1,7 @@
+# 岛仔个人定制版
+
+本 Fork 在原版 UI 上接入飞书个人待办与日历 API 双向操作。安装标识、数据目录和更新通道独立于官方版本。使用方法、数据保护边界、测试和上游维护方式见 [PERSONAL.md](PERSONAL.md)。个人版安装包请从 [本 Fork 的 Releases](https://github.com/gu-rongrui/xiaotang-daozai/releases) 获取。以下保留上游项目介绍与署名。
+
 <div align="center">
 
 <img src="assets/daozai-logo.png" width="112" alt="岛仔" />

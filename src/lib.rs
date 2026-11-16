@@ -18,6 +18,7 @@ pub mod child_process;
 mod settings_window;
 pub mod bt;
 pub mod calendar;
+pub(crate) mod feishu;
 mod calendar_ui;
 mod local_calendar;
 mod calendar_editor;

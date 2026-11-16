@@ -2,7 +2,7 @@ param([Parameter(Mandatory=$true)][string]$WorkPath, [Parameter(Mandatory=$true)
 $ErrorActionPreference = 'Stop'
 # 更新只使用当前 PowerShell 自带模块，避免继承其他终端版本的模块路径。
 $env:PSModulePath = [IO.Path]::Combine($PSHOME, 'Modules')
-$cacheRoot = [IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'Daozai\Updates')).TrimEnd('\')
+$cacheRoot = [IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'DaozaiPersonal\Updates')).TrimEnd('\')
 $workRoot = [IO.Path]::GetFullPath($WorkPath).TrimEnd('\')
 $target = [IO.Path]::GetFullPath($TargetExe)
 $targetDir = Split-Path $target -Parent
@@ -48,7 +48,7 @@ try {
     [IO.File]::Replace($staged, $target, [NullString]::Value)
     $replaced = $true
     Start-Process -FilePath $target -WorkingDirectory $targetDir -WindowStyle Hidden
-    $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Daozai'
+    $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\DaozaiPersonal'
     $registered = Get-ItemProperty -LiteralPath $key -ErrorAction SilentlyContinue
     if ($registered -and [string]::Equals($registered.InstallLocation.TrimEnd('\'), $targetDir, [StringComparison]::OrdinalIgnoreCase)) {
         Set-ItemProperty -LiteralPath $key -Name DisplayVersion -Value $version -ErrorAction SilentlyContinue
@@ -58,7 +58,7 @@ try {
         if ($sizeKb -gt 0) { Set-ItemProperty -LiteralPath $key -Name EstimatedSize -Value $sizeKb -Type DWord -ErrorAction SilentlyContinue }
         # 开始菜单「收集岛仔诊断」：旧版安装没有，或指向已不再附带的 cmd；统一改为调用程序内嵌的诊断收集。失败不影响更新。
         try {
-            $link = Join-Path ([Environment]::GetFolderPath('Programs')) '收集岛仔诊断.lnk'
+            $link = Join-Path ([Environment]::GetFolderPath('Programs')) '收集岛仔个人版诊断.lnk'
             $shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut($link)
             $shortcut.TargetPath = $target; $shortcut.Arguments = '--collect-diagnostics'
             $shortcut.WorkingDirectory = $targetDir; $shortcut.IconLocation = "$target,0"; $shortcut.Save()

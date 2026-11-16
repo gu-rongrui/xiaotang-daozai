@@ -123,18 +123,18 @@ impl Client {
         parse_daily(&self.weather(&location,true)?,&location)?;Ok(())
     }
     #[cfg(all(windows,not(test)))]
-    pub fn store(&self,slot:&str)->Result<(),Error> {keyring::Entry::new("Daozai.Weather.QWeather",slot).map_err(|_|Error::Storage)?.set_password(&self.key).map_err(|_|Error::Storage)}
+    pub fn store(&self,slot:&str)->Result<(),Error> {keyring::Entry::new("DaozaiPersonal.Weather.QWeather",slot).map_err(|_|Error::Storage)?.set_password(&self.key).map_err(|_|Error::Storage)}
     #[cfg(any(not(windows),test))]
     pub fn store(&self,_slot:&str)->Result<(),Error> {if cfg!(test){Ok(())}else{Err(Error::Storage)}}
     pub fn load(host:&str,slot:&str,gate:Arc<AtomicBool>)->Option<Self> {
         #[cfg(all(windows,not(test)))]
-        {if slot.is_empty(){return None;}let key=keyring::Entry::new("Daozai.Weather.QWeather",slot).ok()?.get_password().ok()?;Self::new(host,&key,gate).ok()}
+        {if slot.is_empty(){return None;}let key=keyring::Entry::new("DaozaiPersonal.Weather.QWeather",slot).ok()?.get_password().ok()?;Self::new(host,&key,gate).ok()}
         #[cfg(any(not(windows),test))]
         {let _=(host,slot,gate);None}
     }
     pub fn delete(host:&str)->Result<(),Error> {
         #[cfg(all(windows,not(test)))]
-        {let entry=keyring::Entry::new("Daozai.Weather.QWeather",host).map_err(|_|Error::Storage)?;match entry.delete_credential(){Ok(())|Err(keyring::Error::NoEntry)=>Ok(()),Err(_)=>Err(Error::Storage)}}
+        {let entry=keyring::Entry::new("DaozaiPersonal.Weather.QWeather",host).map_err(|_|Error::Storage)?;match entry.delete_credential(){Ok(())|Err(keyring::Error::NoEntry)=>Ok(()),Err(_)=>Err(Error::Storage)}}
         #[cfg(any(not(windows),test))]
         {let _=host;Ok(())}
     }

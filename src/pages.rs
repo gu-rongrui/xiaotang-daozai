@@ -902,6 +902,7 @@ impl App {
 
     // ================= 待办 =================
     pub(crate) fn page_todo(&mut self, c: &Card, env: &Env, _cmds: &mut Vec<Cmd>) {
+        if self.feishu.store.config.enabled && self.feishu.store.config.tasks {self.page_feishu_todo(c,env);return;}
         // 今天未完成优先，已完成沉底；不在今天的重复待办变暗显示、不能勾选。
         let (done, total) = self.todos.progress(&env.today);
         let order = self.todos.display_order(&env.today);

@@ -27,7 +27,7 @@ try {
         Remove-Item -LiteralPath (Join-Path $targetDir 'started.txt') -ErrorAction SilentlyContinue
         Set-Content -LiteralPath $target -Value 'previous-program'
         $before = (Get-FileHash -LiteralPath $target).Hash
-        $work = Join-Path $env:LOCALAPPDATA ('Daozai\Updates\' + $case)
+        $work = Join-Path $env:LOCALAPPDATA ('DaozaiPersonal\Updates\' + $case)
         New-Item -ItemType Directory -Path $work -Force | Out-Null
         $archive = Join-Path $work 'update.zip'
         $zip = [IO.Compression.ZipFile]::Open($archive, [IO.Compression.ZipArchiveMode]::Create)

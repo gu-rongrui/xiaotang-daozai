@@ -1,0 +1,119 @@
+name: Personal upstream sync and release
+on:
+  workflow_dispatch:
+    inputs:
+      sync_upstream:
+        description: Merge the latest upstream main before testing
+        type: boolean
+        default: true
+  schedule:
+    - cron: '23 3 * * *'
+permissions:
+  contents: write
+  issues: write
+concurrency:
+  group: personal-release
+  cancel-in-progress: false
+jobs:
+  build:
+    if: github.repository == 'gu-rongrui/xiaotang-daozai'
+    runs-on: windows-latest
+    env:
+      CARGO_BUILD_JOBS: 1
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: personal/feishu-sync
+          fetch-depth: 0
+      - name: Prepare candidate without changing the working branch
+        id: prepare
+        shell: pwsh
+        env:
+          SYNC_UPSTREAM: ${{ github.event_name == 'schedule' || inputs.sync_upstream }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          if ($env:SYNC_UPSTREAM -eq 'true') {
+            git fetch https://github.com/Renly1994/xiaotang-daozai.git main
+            if ($LASTEXITCODE -ne 0) { throw 'Upstream fetch failed' }
+            $upstream = git rev-parse FETCH_HEAD
+            git merge-base --is-ancestor $upstream HEAD
+            $unchanged = $LASTEXITCODE -eq 0
+            if ($unchanged -and '${{ github.event_name }}' -eq 'schedule') {
+              'changed=false' >> $env:GITHUB_OUTPUT
+              exit 0
+            }
+            git merge --no-edit --no-ff $upstream
+            if ($LASTEXITCODE -ne 0) { throw 'Upstream merge conflict; personal branch was not changed' }
+          } else {
+            $upstream = git merge-base HEAD origin/main
+          }
+          'changed=true' >> $env:GITHUB_OUTPUT
+          "upstream=$upstream" >> $env:GITHUB_OUTPUT
+          $sha = git rev-parse HEAD
+          $tag = 'personal-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + $sha.Substring(0,8)
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "DAOZAI_BUILD_LABEL=$tag" >> $env:GITHUB_ENV
+      - name: Install Rust stable
+        if: steps.prepare.outputs.changed == 'true'
+        run: rustup toolchain install stable --profile minimal
+      - name: Test all targets with isolated local data
+        if: steps.prepare.outputs.changed == 'true'
+        shell: pwsh
+        run: |
+          $env:DAOZAI_DATA_DIR = Join-Path $env:RUNNER_TEMP 'daozai-test-data'
+          cargo +stable test --locked --all-targets --features record --target x86_64-pc-windows-msvc -- --test-threads=1
+          if ($LASTEXITCODE -ne 0) { throw 'Tests failed; nothing will be released' }
+      - name: Verify installers and package
+        if: steps.prepare.outputs.changed == 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $compiler = ./scripts/get-nsis.ps1 -Directory $env:RUNNER_TEMP
+          ./tests/native_installer.ps1 -NsisCompiler $compiler
+          ./tests/update_installer.ps1
+          ./scripts/package.ps1 -NsisCompiler $compiler
+      - name: Record provenance
+        if: steps.prepare.outputs.changed == 'true'
+        shell: pwsh
+        run: |
+          @{
+            upstream = '${{ steps.prepare.outputs.upstream }}'
+            personal = (git rev-parse HEAD)
+            tag = '${{ steps.prepare.outputs.tag }}'
+            run = '${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+          } | ConvertTo-Json | Set-Content dist/BUILD-INFO.json -Encoding utf8
+      - name: Publish only the verified candidate
+        if: steps.prepare.outputs.changed == 'true'
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ steps.prepare.outputs.tag }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git push origin HEAD:personal/feishu-sync
+          if ($LASTEXITCODE -ne 0) { throw 'Personal branch advanced; candidate was not published' }
+          $sha = git rev-parse HEAD
+          $notes = @"
+          Personal Feishu build. Upstream: ${{ steps.prepare.outputs.upstream }}
+          Personal commit: $sha
+          Verified by all-target tests and installer tests. Install manually; the upstream updater is disabled.
+          "@
+          $notes | Set-Content release-notes.md -Encoding utf8
+          $assets = @(Get-ChildItem dist -File | Select-Object -ExpandProperty FullName)
+          gh release create $env:RELEASE_TAG @assets --target $sha --title "Daozai Personal $env:RELEASE_TAG" --notes-file release-notes.md --draft
+          if ($LASTEXITCODE -ne 0) { throw 'Release upload failed; no published release was replaced' }
+          gh release edit $env:RELEASE_TAG --draft=false --latest
+          if ($LASTEXITCODE -ne 0) { throw 'Draft retained; publication failed' }
+      - name: Report failure
+        if: failure()
+        shell: pwsh
+        run: |
+          $title = 'Personal upstream sync or release needs attention'
+          $issue = gh issue list --state open --search $title --json number --jq '.[0].number'
+          if (-not $issue) {
+            $body = 'The candidate was not released. Inspect Actions: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}. Resolve the conflict or failing checks without overwriting personal changes.'
+            $body | Set-Content failure.md -Encoding utf8
+            gh issue create --title $title --body-file failure.md
+          }

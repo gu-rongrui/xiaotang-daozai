@@ -2,6 +2,8 @@
 use crate::app::{App, Env, Options, PH, PW, WIN_H, WIN_W};
 #[path="messenger/ui_tests.rs"]
 mod enterprise_messenger;
+#[path="feishu/ui_tests.rs"]
+mod feishu;
 #[path="calendar/ui_compatibility_tests.rs"]
 mod calendar_compatibility;
 #[path="doubao_ui_tests.rs"]

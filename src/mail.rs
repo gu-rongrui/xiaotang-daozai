@@ -12,7 +12,7 @@ use std::collections::HashMap;
 #[path="mail_fetch.rs"]
 pub(crate) mod fetch;
 
-pub const SERVICE: &str = "Daozai.Mail";
+pub const SERVICE: &str = "DaozaiPersonal.Mail";
 pub const MICROSOFT_UNSUPPORTED: &str = "Outlook、Hotmail、Live 和 Microsoft 365 云邮箱需要 OAuth 授权，岛仔暂不支持密码直连。";
 
 // ---------------------------------------------------------------- 邮箱类型

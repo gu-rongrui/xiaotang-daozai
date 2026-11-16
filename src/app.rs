@@ -696,6 +696,7 @@ pub struct App {
     /// 本次运行实际使用兼容渲染（Direct3D 12）；设置里的开关与它不同时提示重启。
     pub render_compat_running: bool,
     pub(crate) todos: model::TodoList,
+    pub(crate) feishu: crate::feishu::State,
     pub(crate) water: model::Water,
     pub(crate) shelf: model::Shelf,
 
@@ -904,6 +905,7 @@ impl App {
             render_compat_running: settings.render_compat,
             settings,
             todos: model::TodoList::load(),
+            feishu: Default::default(),
             water: model::Water::default(),
             shelf: model::Shelf::load(),
             w: Spring::new(bw, CLOSE.0, CLOSE.1),
@@ -1231,12 +1233,15 @@ impl App {
 
     /// 所有已连接的平台都参与同步，设置标签只决定正在编辑的账号。
     pub fn calendar_configs(&self) -> Vec<calendar::Config> {
-        if self.calendar.feeds.is_empty() {self.calendar.config.clone().into_iter().collect()}
-        else {self.calendar.feeds.iter().map(|feed|feed.config.clone()).collect()}
+        let api=self.feishu.store.config.enabled && self.feishu.store.config.calendar;
+        let configs:Vec<_>=if self.calendar.feeds.is_empty() {self.calendar.config.clone().into_iter().collect()}
+        else {self.calendar.feeds.iter().map(|feed|feed.config.clone()).collect()};
+        configs.into_iter().filter(|cfg|!api || cfg.provider!=calendar::Provider::Feishu).collect()
     }
 
     /// 等价于 `calendar_configs()==known`，外壳每帧调用，不复制配置。
     pub fn calendar_configs_match(&self, known: &[calendar::Config]) -> bool {
+        if self.feishu.store.config.enabled && self.feishu.store.config.calendar{return self.calendar_configs()==known;}
         if self.calendar.feeds.is_empty() {known==self.calendar.config.as_slice()}
         else {known.len()==self.calendar.feeds.len() && known.iter().zip(&self.calendar.feeds).all(|(known,feed)|*known==feed.config)}
     }
@@ -1787,6 +1792,7 @@ impl App {
         self.fullscreen_hidden=env.fullscreen_hidden;
         self.quota_tick();
         self.weather_tick();
+        self.feishu_tick(&ctx,env);
         self.current_hour=env.hour();
         self.system_idle=env.idle_seconds;
         self.dt = dt;
@@ -2112,6 +2118,7 @@ impl App {
         }
 
         if self.task_dialog.is_some() && reveal>0.9 {self.task_editor_inputs(ui,origin,&mut cmds);}
+        if self.page==TODO_PAGE && reveal>0.9 {self.feishu_task_inputs(ui,origin,&mut cmds);}
         if self.calendar.draft.is_some() && reveal>0.9 {self.calendar_editor_inputs(ui,origin,&mut cmds);}
 
         // ---------- 输出 ----------
@@ -3161,8 +3168,10 @@ impl App {
         }
         let now = format!("{} {}", env.today, env.clock.get(..5).unwrap_or("00:00"));
         let todo_on=self.module_on(TODO_PAGE);
-        let due: Vec<_> = self.todos.items.iter().enumerate().filter(|(_, item)| todo_on && item.reminder_due(&now)).map(|(i,item)| (i,item.text.clone())).collect();
+        let cloud_todo=self.feishu.store.config.enabled && self.feishu.store.config.tasks;
+        let due: Vec<_> = self.todos.items.iter().enumerate().filter(|(_, item)| todo_on && !cloud_todo && item.reminder_due(&now)).map(|(i,item)| (i,item.text.clone())).collect();
         for (i,text) in due { self.todos.items[i].mark_reminded(&now); self.todos.save(); self.alert("待办到时间了", text, 4, true); }
+        self.feishu_task_reminders();
         // v0.5.5 会议提醒：.ics 里的开始时间，默认提前 15 分钟（可设 5/15/30）。
         // v0.5.6 起日历（CalDAV）事件走同一套：同一场会（UID + DTSTART）只提醒一次，
         // 邮件和日历两条来源撞上了也只弹一次。
@@ -3186,6 +3195,14 @@ impl App {
             if !m.all_day && left <= lead && left > -60 && !self.mail.fired.contains(&key) && seen.insert(key.clone()) {
                 let source=provider.map(|provider|provider.label()).unwrap_or("日历");
                 picks.push((key, m.clone(), source.to_string(), CALENDAR_PAGE));
+            }
+        }
+        if calendar_on && self.feishu.store.config.enabled && self.feishu.store.config.calendar {
+            for event in &self.feishu.events {
+                let m=&event.meeting;let key=calendar::dedupe_key(m);let left=m.start-now_ts;
+                if !m.all_day && left<=lead && left> -60 && !self.mail.fired.contains(&key) && seen.insert(key.clone()){
+                    picks.push((key,m.clone(),format!("飞书 · {}",event.name),CALENDAR_PAGE));
+                }
             }
         }
         if calendar_on && self.mail_active() {

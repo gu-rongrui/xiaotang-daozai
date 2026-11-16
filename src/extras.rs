@@ -1671,6 +1671,7 @@ impl App {
                         });
                     }
                     4=>{
+                        self.feishu_settings(ui);
                         settings_label(ui,"待办清单");
                         settings_card(ui,|ui|{
                             ui.label(egui::RichText::new("在待办页添加、编辑任务并设置提醒时间。").size(13.0));
@@ -1894,6 +1895,7 @@ impl App {
                         });
                     }
                     8=>{
+                        self.feishu_settings(ui);
                         ui.spacing_mut().item_spacing.y=4.0;
                         // v0.5.6 日程：状态在最上面，后面才是平台、账号和提醒。
                         // 只读；服务器地址由平台决定，用户不用抄。

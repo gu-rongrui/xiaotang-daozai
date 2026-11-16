@@ -7,10 +7,10 @@ Unicode true
 !include "FileFunc.nsh"
 
 !ifndef APP_ID
-  !define APP_ID "Daozai"
+  !define APP_ID "DaozaiPersonal"
 !endif
 !ifndef APP_NAME
-  !define APP_NAME "岛仔"
+  !define APP_NAME "岛仔个人版"
 !endif
 !define UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_ID}"
 Name "${APP_NAME}"

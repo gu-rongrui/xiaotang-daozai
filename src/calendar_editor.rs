@@ -10,11 +10,21 @@ fn fallback_ics_uid(event:&crate::mail::Meeting)->String{
 
 impl App {
     pub(crate) fn open_calendar_editor(&mut self,uid:Option<&str>){
+        self.feishu.calendar_target.clear();self.feishu.calendar_event.clear();self.feishu.calendar_base=serde_json::Value::Null;
+        if let Some(e)=uid.and_then(|uid|self.feishu.events.iter().find(|e|e.meeting.uid==uid)){
+            if !crate::feishu::event_writable(&e.raw,&e.calendar){return;}
+            self.feishu.calendar_target=e.calendar.clone();self.feishu.calendar_event=crate::feishu::text(&e.raw,"event_id").into();self.feishu.calendar_base=crate::feishu::event_fields(&e.raw);
+            self.calendar.draft=Some(Draft::edit(&local_calendar::Entry{event:e.meeting.clone(),reminder:None}));self.show_page(CALENDAR_PAGE);return;
+        }
+        if uid.is_none() && self.feishu.store.config.enabled && self.feishu.store.config.calendar {
+            self.feishu.calendar_target=self.feishu.store.config.selected.iter().find(|id|self.feishu.store.calendar_writable(id)).cloned().unwrap_or_default();
+        }
         let draft=uid.and_then(|uid|self.calendar.local.iter().find(|entry|entry.event.uid==uid)).map(Draft::edit)
             .unwrap_or_else(||Draft::new(self.calendar.view.day));
         self.show_page(CALENDAR_PAGE);self.calendar.draft=Some(draft);
     }
     pub(crate) fn save_calendar_editor(&mut self){
+        if !self.feishu.calendar_target.is_empty(){self.save_feishu_calendar_editor();return;}
         let Some(mut draft)=self.calendar.draft.take() else{return;};
         let result=(||{
             if !self.calendar.local_error.is_empty(){return Err(self.calendar.local_error.clone());}
@@ -73,6 +83,7 @@ impl App {
         note
     }
     fn delete_calendar_editor(&mut self){
+        if !self.feishu.calendar_target.is_empty(){return;}
         let Some(draft)=self.calendar.draft.as_mut() else{return;};
         let Some(uid)=draft.uid.as_ref() else{return;};
         let entries:Vec<_>=self.calendar.local.iter().filter(|entry|entry.event.uid!=*uid).cloned().collect();
@@ -86,10 +97,14 @@ impl App {
         }
     }
     pub(crate) fn draw_calendar_editor(&mut self,c:&Card){
+        let cloud=!self.feishu.calendar_target.is_empty();
+        let target=if cloud{format!("飞书 · {}",self.feishu.store.calendar_name(&self.feishu.calendar_target))}else{"仅保存在本机".into()};
+        let mut switch=false;
         let Some(d)=self.calendar.draft.as_mut() else{return;};
         let accent=Color32::from_rgb(82,162,255);
         c.centered_text(43.0,20.0,if d.uid.is_some(){"编辑日程"}else{"新建日程"},13.0,W::Semibold,theme::WHITE,H::Left);
-        c.centered_text(370.0,20.0,"仅保存在本机",9.0,W::Regular,theme::GRAY,H::Right);
+        c.centered_text(370.0,20.0,&c.fit(&target,8.0,W::Regular,210.0),8.0,W::Regular,theme::GRAY,H::Right);
+        if d.uid.is_none() && self.feishu.store.config.enabled && c.hit(162.0,10.0,210.0,20.0,"calendar-target").on_hover_text("点击切换保存位置：本机 / 可写入的飞书日历").clicked(){switch=true;}
         for (label,y) in [("名称",49.0),("开始",82.0),("结束",114.0),("提醒",147.0)]{c.centered_text(43.0,y,label,10.0,W::Regular,theme::GRAY,H::Left);}
         for (x,y,w) in [(86.0,38.0,284.0),(86.0,71.0,120.0),(86.0,103.0,120.0)]{c.fill(x,y,w,23.0,6.0,theme::CARD);}
         if !d.all_day {for y in [71.0,103.0]{c.fill(214.0,y,66.0,23.0,6.0,theme::CARD);}}
@@ -99,16 +114,17 @@ impl App {
         if d.all_day {c.centered_text(214.0,114.0,"包含结束当天",8.5,W::Regular,theme::GRAY,H::Left);}
         let options=if d.all_day{vec![(None,"不提醒"),(Some(0),"当天 09:00")]}else{vec![(None,"不提醒"),(Some(0),"准时"),(Some(5),"提前5分"),(Some(15),"提前15分"),(Some(30),"提前30分")]};
         let width=if d.all_day{126.0}else{54.0};
-        for (i,(value,label)) in options.into_iter().enumerate(){
+        for (i,(value,label)) in options.into_iter().filter(|_|!cloud).enumerate(){
             let x=86.0+i as f32*(width+3.0);let on=if d.all_day{d.reminder.is_some()==value.is_some()}else{d.reminder==value};
             let (r,b)=paint::capsule(c,x,136.0,width,21.0,&format!("calendar-editor-reminder-{i}"),if on{Color32::from_rgb(28,65,100)}else{theme::BTN},theme::BTN_HOVER);
             b.centered_text(x+width/2.0,146.5,label,8.4,W::Regular,theme::WHITE,H::Center);
-            if r.clicked(){d.reminder=value;}
+            if r.clicked()&&!cloud{d.reminder=value;}
         }
-        let message=if d.error.is_empty(){"日期 年-月-日 · 时间 时:分"}else{&d.error};
+        if cloud{c.centered_text(86.0,147.0,if self.feishu.calendar_event.is_empty(){"飞书默认提醒"}else{"保留飞书原有提醒"},10.0,W::Regular,theme::GRAY,H::Left);}
+        let message=if d.error.is_empty(){if cloud{"飞书现有提醒保持不变 · 普通单次日程"}else{"日期 年-月-日 · 时间 时:分"}}else{&d.error};
         c.centered_text(86.0,172.0,&c.fit(message,9.0,W::Regular,284.0),9.0,W::Regular,if d.error.is_empty(){theme::GRAY}else{theme::RED},H::Left);
         let mut delete=false;
-        if d.uid.is_some(){
+        if d.uid.is_some()&&!cloud{
             let (r,b)=paint::capsule(c,43.0,188.0,82.0,22.0,"calendar-editor-delete",theme::BTN,theme::BTN_HOVER);
             b.centered_text(84.0,199.0,if d.confirm_delete{"确认删除"}else{"删除日程"},9.5,W::Regular,theme::RED,H::Center);
             if r.clicked(){if d.confirm_delete{delete=true;}else{d.confirm_delete=true;}}
@@ -116,7 +132,11 @@ impl App {
         let (cancel,b)=paint::capsule(c,224.0,188.0,64.0,22.0,"calendar-editor-cancel",theme::BTN,theme::BTN_HOVER);
         b.centered_text(256.0,199.0,"取消",10.0,W::Regular,theme::WHITE,H::Center);
         let (save,b)=paint::capsule(c,298.0,188.0,72.0,22.0,"calendar-editor-save",accent,Color32::from_rgb(110,180,255));
-        b.centered_text(334.0,199.0,"保存到本机",10.0,W::Semibold,theme::WHITE,H::Center);
+        b.centered_text(334.0,199.0,if cloud{"保存到飞书"}else{"保存到本机"},10.0,W::Semibold,theme::WHITE,H::Center);
+        if switch{
+            let mut targets=vec![String::new()];targets.extend(self.feishu.store.config.selected.iter().filter(|id|self.feishu.store.calendar_writable(id)).cloned());
+            let at=targets.iter().position(|id|id==&self.feishu.calendar_target).unwrap_or(0);self.feishu.calendar_target=targets[(at+1)%targets.len()].clone();
+        }
         if delete{self.delete_calendar_editor();}else if cancel.clicked(){self.calendar.draft=None;}else if save.clicked(){self.save_calendar_editor();}
     }
     pub(crate) fn calendar_editor_inputs(&mut self,ui:&mut egui::Ui,origin:egui::Pos2,cmds:&mut Vec<Cmd>){
@@ -129,5 +149,26 @@ impl App {
         if !d.all_day {input(&mut d.start_time,"calendar-local-start-time",220.0,74.0,54.0);input(&mut d.end_time,"calendar-local-end-time",220.0,106.0,54.0);}
         let first=!d.focused;if first{name.request_focus();d.focused=true;cmds.push(Cmd::Focus);}
         if !first && ui.input(|i|i.key_pressed(egui::Key::Enter)){self.save_calendar_editor();}
+    }
+    fn save_feishu_calendar_editor(&mut self){
+        use serde_json::json;
+        if self.feishu.submitted.is_some(){return;}
+        let Some(draft)=self.calendar.draft.as_ref() else{return;};
+        let result=(||{
+            if !self.feishu.store.config.enabled || !self.feishu.store.config.writes{return Err("请在设置中开启飞书云端写入".into());}
+            if !self.feishu.store.calendar_writable(&self.feishu.calendar_target){return Err("此日历没有写入权限".into());}
+            let entry=draft.entry()?;
+            let time=|stamp:i64|{
+                if draft.all_day{json!({"date":chrono::DateTime::from_timestamp(stamp,0).unwrap().with_timezone(&chrono::Local).format("%Y-%m-%d").to_string()})}
+                else{json!({"timestamp":stamp.to_string(),"timezone":"Asia/Shanghai"})}
+            };
+            let patch=json!({"summary":draft.title.trim(),"start_time":time(entry.event.start),"end_time":time(entry.event.end.unwrap())});
+            let change=crate::feishu::Change::new(if self.feishu.calendar_event.is_empty(){"event-create"}else{"event-update"},&self.feishu.calendar_event,&self.feishu.calendar_target,self.feishu.calendar_base.clone(),patch);
+            Ok(change)
+        })();
+        match result{
+            Ok(change)=>{self.feishu.submitted=Some((change.id.clone(),true));self.feishu_send(crate::feishu::worker::Command::Queue(change));},
+            Err(error)=>if let Some(d)=&mut self.calendar.draft{d.error=error;},
+        }
     }
 }

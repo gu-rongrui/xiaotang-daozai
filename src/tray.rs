@@ -48,8 +48,8 @@ const CMD_SETTINGS:u32=6;
 const TIMER_MENU: usize = 12;
 
 const RUN_KEY: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
-const RUN_VALUE: PCWSTR = w!("Daozai");
-const MUTEX_NAME: PCWSTR = w!("Local\\Daozai.SingleInstance");
+const RUN_VALUE: PCWSTR = w!("DaozaiPersonal");
+const MUTEX_NAME: PCWSTR = w!("Local\\DaozaiPersonal.SingleInstance");
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct State {
@@ -387,7 +387,7 @@ impl Tray {
                     return;
                 };
                 let hinst = HINSTANCE(module.0);
-                let class = w!("DaozaiTray");
+                let class = w!("DaozaiPersonalTray");
                 let wc = WNDCLASSW {
                     style: WNDCLASS_STYLES(0),
                     lpfnWndProc: Some(wndproc),
@@ -648,7 +648,7 @@ fn request_existing_window(hwnd:HWND,calendar:bool)->bool {unsafe{
 }}
 
 pub fn activate_existing(calendar:bool)->bool {unsafe{
-    let Ok(tray)=FindWindowW(w!("DaozaiTray"),PCWSTR::null()) else{return false;};
+    let Ok(tray)=FindWindowW(w!("DaozaiPersonalTray"),PCWSTR::null()) else{return false;};
     let Ok(window)=FindWindowW(PCWSTR::null(),w!("岛仔")) else{return false;};
     let(mut tray_pid,mut window_pid)=(0,0);
     GetWindowThreadProcessId(tray,Some(&mut tray_pid));

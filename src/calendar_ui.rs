@@ -40,16 +40,17 @@ fn occurs_on(event:&mail::Meeting,day:NaiveDate)->bool {
 }
 
 #[derive(Clone,Copy,PartialEq,Eq)]
-pub(crate) enum Source<'a> { Calendar(Option<calendar::Provider>), Mail(&'a str), Local }
+pub(crate) enum Source<'a> { Calendar(Option<calendar::Provider>), Feishu(&'a str,&'a str,Color32), Mail(&'a str), Local }
 impl Source<'_> {
     fn icon_key(self)->&'static str {
-        match self {Self::Calendar(Some(provider))=>provider.key(),Self::Calendar(None)=>"calendar",Self::Mail(_)=>"mail",Self::Local=>"local"}
+        match self {Self::Calendar(Some(provider))=>provider.key(),Self::Calendar(None)=>"calendar",Self::Feishu(..)=>"feishu",Self::Mail(_)=>"mail",Self::Local=>"local"}
     }
     fn label(self)->String {
-        match self {Self::Calendar(provider)=>provider.map(|p|p.label()).unwrap_or("工作日历").to_string(),Self::Mail(account)=>format!("邮件 · {account}"),Self::Local=>"本机日程".into()}
+        match self {Self::Calendar(provider)=>provider.map(|p|p.label()).unwrap_or("工作日历").to_string(),Self::Feishu(_,name,_)=>format!("飞书 · {name}"),Self::Mail(account)=>format!("邮件 · {account}"),Self::Local=>"本机日程".into()}
     }
     fn color(self)->Color32 {
         match self {
+            Self::Feishu(_,_,color)=>color,
             Self::Calendar(Some(calendar::Provider::WeCom))=>Color32::from_rgb(105,208,157),
             Self::Calendar(Some(calendar::Provider::DingTalk))=>Color32::from_rgb(77,192,242),
             Self::Calendar(Some(calendar::Provider::ICloud))=>Color32::from_rgb(255,105,97),
@@ -112,7 +113,7 @@ pub(crate) fn source_icon(c:&Card,source:Source<'_>,x:f32,y:f32,size:f32) {
         Source::Calendar(Some(calendar::Provider::DingTalk))=>egui::include_image!("../assets/calendar/dingtalk.svg"),
         Source::Calendar(Some(calendar::Provider::WeCom))=>egui::include_image!("../assets/calendar/wecom.svg"),
         Source::Mail(_)=>egui::include_image!("../assets/calendar/mail.svg"),
-        Source::Calendar(Some(calendar::Provider::Feishu))=>egui::include_image!("../assets/calendar/feishu.svg"),
+        Source::Calendar(Some(calendar::Provider::Feishu))|Source::Feishu(..)=>egui::include_image!("../assets/calendar/feishu.svg"),
         _=>egui::include_image!("../assets/settings-icons/calendar-days.svg"),
     };
     let egui::ImageSource::Bytes{uri,bytes}=icon else{return};
@@ -225,6 +226,7 @@ impl App {
     }
 
     pub(crate) fn request_calendar_month(&mut self, force:bool) {
+        if self.feishu.store.config.enabled && self.feishu.store.config.calendar {self.feishu_refresh();}
         let has_accounts=!self.calendar_configs().is_empty();
         let view=&mut self.calendar.view;
         if !has_accounts || !force && (view.loaded==Some(view.month) || view.loading || !view.error.is_empty()){return;}
@@ -234,11 +236,13 @@ impl App {
     }
 
     pub(crate) fn calendar_work_events(&self, month:Option<NaiveDate>)->Vec<(&mail::Meeting,Option<calendar::Provider>)> {
+        let api=self.feishu.store.config.enabled && self.feishu.store.config.calendar;
         if self.calendar.feeds.is_empty() {
             let events=if month.is_some() && self.calendar.view.loaded==month {&self.calendar.view.events}else{&self.calendar.events};
-            return events.iter().map(|event|(event,self.calendar.config.as_ref().map(|cfg|cfg.provider))).collect();
+            let provider=self.calendar.config.as_ref().map(|cfg|cfg.provider);
+            return events.iter().filter(|_|!api || provider!=Some(calendar::Provider::Feishu)).map(|event|(event,provider)).collect();
         }
-        self.calendar.feeds.iter().flat_map(|feed|{
+        self.calendar.feeds.iter().filter(|feed|!api || feed.config.provider!=calendar::Provider::Feishu).flat_map(|feed|{
             let events=if month.is_some() && feed.month.loaded==month {&feed.month.events}else{&feed.events};
             events.iter().map(move |event|(event,Some(feed.config.provider)))
         }).collect()
@@ -250,7 +254,8 @@ impl App {
         let mut events:Vec<Entry<'_>>=vec![];
         let mut seen=std::collections::HashMap::<String,usize>::new();
         let local=self.calendar.local.iter().map(|entry|(&entry.event,Source::Local));
-        for (event,source) in work.chain(mail).chain(local).filter(|(event,_)|occurs_on(event,day)) {
+        let feishu=self.feishu.events.iter().filter(|_|self.feishu.store.config.enabled && self.feishu.store.config.calendar).map(|e|(&e.meeting,Source::Feishu(&e.calendar,&e.name,e.color)));
+        for (event,source) in work.chain(mail).chain(local).chain(feishu).filter(|(event,_)|occurs_on(event,day)) {
             let key=entry_key(event);
             if let Some(&index)=seen.get(&key) {
                 let entry=&mut events[index];
@@ -294,7 +299,8 @@ impl App {
         let grid=calendar::month_grid(self.calendar.view.month);
         let mut dots:std::collections::HashMap<NaiveDate,Vec<Source<'_>>>=std::collections::HashMap::new();
         let local=self.calendar.local.iter().map(|entry|(&entry.event,Source::Local));
-        for (event,source) in work.chain(mail).chain(local) {
+        let feishu=self.feishu.events.iter().filter(|_|self.feishu.store.config.enabled && self.feishu.store.config.calendar).map(|e|(&e.meeting,Source::Feishu(&e.calendar,&e.name,e.color)));
+        for (event,source) in work.chain(mail).chain(local).chain(feishu) {
             let Some((start,last))=event_days(event) else{continue;};
             if last<grid[0] || start>grid[41]{continue;}
             for date in grid.iter().filter(|date|start<=**date && **date<=last) {
@@ -316,10 +322,11 @@ impl App {
         let day=self.calendar.view.day;
         let heading=format!("{} · {}月{}日",if day==today{"今天"}else{["周一","周二","周三","周四","周五","周六","周日"][day.weekday().num_days_from_monday() as usize]},day.month(),day.day());
         c.text(167.0,44.0,&heading,8.8,W::Semibold,accent,H::Left);
-        let status=if self.calendar.view.loading{"同步中".to_string()}else if !self.calendar.view.error.is_empty(){"重试同步".to_string()}else if !self.calendar.view.warning.is_empty(){"部分同步".to_string()}else {let at=self.calendar.feeds.iter().map(|feed|feed.last_sync.as_str()).max().unwrap_or(&self.calendar.last_sync);if at.is_empty(){"".into()}else{format!("{} 更新",at.split_whitespace().last().unwrap_or(""))}};
+        let api=self.feishu.store.config.enabled && self.feishu.store.config.calendar;
+        let status=if api{if !self.feishu.error.is_empty(){"同步失败 · 刷新".into()}else if self.feishu.status.contains("正在"){"同步中".into()}else{"飞书 · 刷新".into()}}else if self.calendar.view.loading{"同步中".to_string()}else if !self.calendar.view.error.is_empty(){"重试同步".to_string()}else if !self.calendar.view.warning.is_empty(){"部分同步".to_string()}else {let at=self.calendar.feeds.iter().map(|feed|feed.last_sync.as_str()).max().unwrap_or(&self.calendar.last_sync);if at.is_empty(){"".into()}else{format!("{} 更新",at.split_whitespace().last().unwrap_or(""))}};
         c.text(376.0,44.0,&status,7.4,W::Regular,muted,H::Right);
         let sync_hint=if !self.calendar.view.error.is_empty(){self.calendar.view.error.as_str()}else if !self.calendar.view.warning.is_empty(){self.calendar.view.warning.as_str()}else{"同步这个月份"};
-        if !self.calendar_configs().is_empty() && !self.calendar.view.loading && c.hit(326.0,33.0,52.0,15.0,"calendar-sync").on_hover_text(sync_hint).clicked(){self.request_calendar_month(true);}
+        if (api || !self.calendar_configs().is_empty()) && !self.calendar.view.loading && c.hit(326.0,33.0,52.0,15.0,"calendar-sync").on_hover_text(sync_hint).clicked(){self.request_calendar_month(true);}
         let focus=self.calendar.view.focus.clone();
         let scroll_to_focus=if c.live{std::mem::take(&mut self.calendar.view.scroll_to_focus)}else{false};
         let mut first=self.calendar.view.first;
@@ -385,8 +392,19 @@ impl App {
             }
             let can_ignore=entry.sources.iter().any(|source|matches!(source,Source::Mail(_)));
             let is_local=entry.sources.contains(&Source::Local);
-            let title_right=if can_ignore || is_local{352.0}else{371.0};
+            let is_feishu=entry.sources.iter().any(|s|matches!(s,Source::Feishu(..)));
+            let title_right=if is_feishu && !featured{307.0}else if can_ignore || is_local || is_feishu{352.0}else{371.0};
             c.centered_text(x+2.0,cy,&c.fit(&event.title,size,W::Semibold,title_right-x-2.0),size,W::Semibold,if has_ended(event,now){muted}else{theme::WHITE},H::Left);
+            if is_feishu {
+                if let Some(view)=self.feishu.events.iter().find(|e|e.meeting.uid==event.uid){
+                    c.circle(if featured{276.0}else{198.0},if featured{110.0}else{cy},2.0,view.color);
+                    let edit=self.feishu.store.calendar_writable(&view.calendar) && crate::feishu::event_writable(&view.raw,&view.calendar);
+                    c.centered_text(365.0,cy,if edit{"编辑"}else{"只读"},7.5,W::Regular,view.color,H::Center);
+                    if edit && c.hit(354.0,cy-8.0,23.0,16.0,("calendar-edit-feishu",event.uid.as_str())).clicked(){edit_local=Some(event.uid.clone());}
+                    if featured{c.centered_text(280.0,110.0,&c.fit(&view.name,7.5,W::Regular,92.0),7.5,W::Regular,view.color,H::Left);}
+                    else{c.centered_text(350.0,cy,&c.fit(&view.name,7.0,W::Regular,37.0),7.0,W::Regular,view.color,H::Right);}
+                }
+            }
             if is_local {
                 c.centered_text(365.0,cy,"编辑",7.5,W::Regular,accent,H::Center);
                 if c.hit(354.0,cy-8.0,23.0,16.0,("calendar-edit-local",event.uid.as_str())).clicked(){edit_local=Some(event.uid.clone());}
