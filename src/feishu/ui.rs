@@ -59,7 +59,8 @@ impl App {
             ui.small("首次连接只读取；开启云端写入后，保存操作进入本机队列。已有本地数据不会自动上传。");
             ui.horizontal(|ui|{ui.label("后台刷新（分钟）");ui.add(egui::DragValue::new(&mut config.interval_minutes).range(15..=1440));});
             ui.horizontal(|ui|{ui.label("本机每月请求预算");ui.add(egui::DragValue::new(&mut config.monthly_budget).range(100..=1_000_000));});
-            ui.small(format!("本机本月已预约 {} 次请求；此计数不代表飞书后台的总用量。",self.feishu.store.calls));
+            ui.small(format!("本机本月已计入 {} 次请求（含失败尝试）；不是飞书账号总用量。",self.feishu.store.calls));
+            ui.small("后台按间隔读取待办和本月日程；翻页复用 10 分钟缓存，日历列表缓存 6 小时。保存修改及时提交，立即同步可强制刷新。");
             egui::CollapsingHeader::new("CLI 路径").show(ui,|ui|{ui.add(egui::TextEdit::singleline(&mut config.cli).hint_text("留空使用官方 npm 安装的 lark-cli.exe"));});
             if config.calendar {
                 ui.label("需要同步的日历（首次默认选择主日历）");
@@ -106,7 +107,7 @@ impl App {
         let (add,b)=paint::capsule(c,42.0,96.0,74.0,26.0,"feishu-task-add",theme::BTN,theme::BTN_HOVER);b.centered_text(79.0,109.0,"＋ 加一个",10.0,W::Regular,theme::WHITE,H::Center);
         let (refresh,b)=paint::capsule(c,124.0,96.0,62.0,26.0,"feishu-task-refresh",theme::BTN,theme::BTN_HOVER);b.centered_text(155.0,109.0,"刷新",10.0,W::Regular,theme::WHITE,H::Center);
         if add.clicked(){if writable{self.feishu.editing=Some(TaskDraft::new(None));}else{self.settings_tab=4;self.open_settings();}}
-        if refresh.clicked(){self.feishu_refresh();}
+        if refresh.clicked(){self.feishu_send(Command::Tasks);}
         c.fill(196.0,31.0,181.0,93.0,12.0,theme::CARD);
         if tasks.is_empty(){c.centered_text(286.0,75.0,"飞书中暂无待办",10.0,W::Regular,theme::GRAY,H::Center);return;}
         let mut tasks=tasks;tasks.sort_by_key(|t|text(t,"completed_at").parse::<i64>().unwrap_or(0)>0);

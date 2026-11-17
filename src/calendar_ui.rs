@@ -226,7 +226,7 @@ impl App {
     }
 
     pub(crate) fn request_calendar_month(&mut self, force:bool) {
-        if self.feishu.store.config.enabled && self.feishu.store.config.calendar {self.feishu_refresh();}
+        if self.feishu.store.config.enabled && self.feishu.store.config.calendar {self.feishu_send(crate::feishu::worker::Command::Calendar(self.calendar.view.month,force));}
         let has_accounts=!self.calendar_configs().is_empty();
         let view=&mut self.calendar.view;
         if !has_accounts || !force && (view.loaded==Some(view.month) || view.loading || !view.error.is_empty()){return;}

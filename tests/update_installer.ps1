@@ -23,16 +23,19 @@ try {
     $data = Join-Path $targetDir 'settings.json'
     Set-Content -LiteralPath $data -Value 'keep-user-data'
     Add-Type -AssemblyName System.IO.Compression.FileSystem
-    foreach ($case in @('success','inherited-shell','bad-hash','wrong-version','traversal')) {
+    foreach ($case in @('success','inherited-shell','bad-hash','wrong-version','traversal','upstream-package')) {
         Remove-Item -LiteralPath (Join-Path $targetDir 'started.txt') -ErrorAction SilentlyContinue
-        Set-Content -LiteralPath $target -Value 'previous-program'
+        for ($attempt=0; ; $attempt++) {
+            try { Set-Content -LiteralPath $target -Value 'previous-program'; break }
+            catch [IO.IOException] { if ($attempt -ge 49) { throw }; Start-Sleep -Milliseconds 100 }
+        }
         $before = (Get-FileHash -LiteralPath $target).Hash
         $work = Join-Path $env:LOCALAPPDATA ('DaozaiPersonal\Updates\' + $case)
         New-Item -ItemType Directory -Path $work -Force | Out-Null
         $archive = Join-Path $work 'update.zip'
         $zip = [IO.Compression.ZipFile]::Open($archive, [IO.Compression.ZipArchiveMode]::Create)
         $version = if ($case -eq 'wrong-version') {'9.8.8'} else {'9.8.7'}
-        $entry = if ($case -eq 'traversal') {'../daozai.exe'} else {"Daozai-v$version-windows-x64/daozai.exe"}
+        $entry = if ($case -eq 'traversal') {'../daozai.exe'} elseif ($case -eq 'upstream-package') {"Daozai-v$version-windows-x64/daozai.exe"} else {"DaozaiPersonal-v$version-windows-x64/daozai.exe"}
         [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $fixture, $entry) | Out-Null
         $zip.Dispose()
         Set-Content -LiteralPath (Join-Path $work 'version.txt') -Value $version
@@ -59,6 +62,10 @@ try {
             if ((Get-FileHash -LiteralPath $target).Hash -ne (Get-FileHash -LiteralPath $fixture).Hash) { throw '未替换为新版程序' }
             for ($attempt=0; $attempt -lt 50 -and -not (Test-Path -LiteralPath (Join-Path $targetDir 'started.txt')); $attempt++) { Start-Sleep -Milliseconds 100 }
             if (-not (Test-Path -LiteralPath (Join-Path $targetDir 'started.txt'))) { throw '更新后没有重启' }
+            # The marker is written just before exit; wait for the fixture to release its EXE.
+            Get-Process daozai -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $target } | ForEach-Object {
+                if (-not $_.WaitForExit(5000)) { throw '更新测试程序没有退出' }
+            }
         } else {
             if ($code -eq 0 -or -not (Test-Path -LiteralPath (Join-Path $work 'error.txt'))) { throw "未拒绝无效更新：$case" }
             if ((Get-FileHash -LiteralPath $target).Hash -ne $before) { throw '无效更新修改了原程序' }

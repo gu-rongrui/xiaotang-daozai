@@ -5,11 +5,9 @@ use std::{io::{Read, Write}, path::PathBuf, sync::{mpsc::{self, Receiver}, Arc, 
 const REPOSITORY: &str = "https://github.com/gu-rongrui/xiaotang-daozai";
 const API: &str = "https://api.github.com/repos/gu-rongrui/xiaotang-daozai/releases/latest";
 const RELEASES: &str = "https://github.com/gu-rongrui/xiaotang-daozai/releases";
-const BACKUP_DOWNLOAD: &str = RELEASES;
 const STARTUP_DELAY: Duration = Duration::from_secs(10);
 const CHECK_INTERVAL: Duration = Duration::from_secs(24 * 3600);
 const RETRY_INTERVAL: Duration = Duration::from_secs(3600);
-const IN_APP_UPDATES: bool = false;
 
 #[derive(Clone, Debug)]
 struct Release { version: String, notes: String, page: String, package: Option<Package> }
@@ -121,16 +119,12 @@ impl State {
             }
         }
         // 复用主界面的低频轮询；只在实际检查时启动线程，不增加常驻计时线程。
-        if IN_APP_UPDATES && !cfg!(test) && self.should_check(Instant::now()) { self.begin_check(ctx, true, check); }
+        if !cfg!(test) && self.should_check(Instant::now()) { self.begin_check(ctx, true, check); }
         if self.rx.is_some() && !self.automatic_check { ctx.request_repaint_after(Duration::from_millis(100)); }
     }
 
     pub(crate) fn ui(&mut self, ui: &mut egui::Ui) {
-        if !IN_APP_UPDATES {
-            ui.label("个人定制版 · 请从个人版 Releases 手动下载安装更新");
-            ui.hyperlink_to("打开个人版发布页",RELEASES);
-            return;
-        }
+        ui.small("个人版更新 · 自动检查每天一次，下载与重启需点击确认");
         if ui.add_enabled(self.rx.is_none(), egui::Button::new("检查更新")).clicked() {
             self.begin_check(ui.ctx(), false, check);
         }
@@ -264,8 +258,6 @@ impl State {
                         }
                         ui.add_space(2.0);
                         ui.horizontal(|ui| {
-                            ui.hyperlink_to(egui::RichText::new("网盘下载").size(11.5).color(theme::BLUE),BACKUP_DOWNLOAD);
-                            ui.label(egui::RichText::new("·").color(theme::DIM));
                             ui.hyperlink_to(egui::RichText::new("浏览器下载").size(11.5).color(theme::GRAY),&release.page);
                             ui.label(egui::RichText::new("·").color(theme::DIM));
                             ui.hyperlink_to(egui::RichText::new("查看发布说明").size(11.5).color(theme::GRAY),&release.page);
@@ -363,12 +355,13 @@ fn check() -> Result<Option<Release>, String> {
         })?;
     let value: serde_json::Value = serde_json::from_reader(response.into_reader())
         .map_err(|_| "更新信息格式异常，请稍后重试".to_owned())?;
-    release_info(&value, env!("CARGO_PKG_VERSION"))
+    release_info(&value, option_env!("DAOZAI_BUILD_LABEL").unwrap_or(env!("CARGO_PKG_VERSION")))
 }
 
 fn release_info(value: &serde_json::Value, current: &str) -> Result<Option<Release>, String> {
     let Some(tag) = parse_release(value, current)? else { return Ok(None); };
-    let name = format!("Daozai-v{}-windows-x64.zip", tag.trim_start_matches('v'));
+    let base=tag.strip_prefix("personal-v").and_then(|s|s.rsplit_once('-')).ok_or("个人版更新版本号无效")?.0;
+    let name = format!("DaozaiPersonal-v{base}-windows-x64.zip");
     let expected = format!("{REPOSITORY}/releases/download/{tag}/{name}");
     let package = value["assets"].as_array().and_then(|assets| assets.iter().find(|asset| asset["name"] == name))
         .and_then(|asset| {
@@ -395,7 +388,8 @@ fn download(release: &Release, tx: &mpsc::Sender<Event>, cancel: &AtomicBool) ->
         let mut output = std::fs::File::create(work.join("update.zip")).map_err(|_| "无法保存更新包")?;
         transfer(&mut input, &mut output, package, cancel, |progress| { let _ = tx.send(Event::Progress(progress)); })?;
         std::fs::write(work.join("apply.ps1"), concat!("\u{feff}", include_str!("../installer/update.ps1"))).map_err(|_| "无法准备更新程序")?;
-        std::fs::write(work.join("version.txt"), release.version.trim_start_matches('v')).map_err(|_| "无法保存更新信息")?;
+        let base=release.version.strip_prefix("personal-v").and_then(|s|s.rsplit_once('-')).ok_or("个人版更新版本号无效")?.0;
+        std::fs::write(work.join("version.txt"), base).map_err(|_| "无法保存更新信息")?;
         std::fs::write(work.join("hash.txt"), &package.hash).map_err(|_| "无法保存校验信息")?;
         if cancel.load(Ordering::Relaxed) { return Err("下载已取消".into()); }
         Ok(work.clone())
@@ -442,10 +436,15 @@ fn launch_installer(work: &std::path::Path) -> Result<(), String> {
 #[cfg(not(windows))]
 fn launch_installer(_: &std::path::Path) -> Result<(), String> { Err("仅支持 Windows 应用内更新".into()) }
 
-fn version(value: &str) -> Option<[u64; 3]> {
-    let mut parts = value.strip_prefix('v').unwrap_or(value).split('.');
-    let mut numbers = [0; 3];
-    for number in &mut numbers {
+fn version(value: &str) -> Option<[u64; 4]> {
+    let (base,revision)=if let Some(personal)=value.strip_prefix("personal-v"){
+        let (base,revision)=personal.rsplit_once('-')?;
+        if revision.is_empty() || !revision.bytes().all(|c|c.is_ascii_digit()){return None;}
+        (base,revision.parse().ok()?)
+    }else{(value.strip_prefix('v').unwrap_or(value),0)};
+    let mut parts = base.split('.');
+    let mut numbers = [0; 4];numbers[3]=revision;
+    for number in &mut numbers[..3] {
         let part = parts.next()?;
         if part.is_empty() || !part.bytes().all(|c| c.is_ascii_digit()) { return None; }
         *number = part.parse().ok()?;
@@ -459,6 +458,7 @@ fn parse_release(value: &serde_json::Value, current: &str) -> Result<Option<Stri
         return Err(invalid());
     }
     let tag = value["tag_name"].as_str().ok_or_else(invalid)?;
+    if !tag.starts_with("personal-v"){return Err(invalid());}
     let latest = version(tag).ok_or_else(invalid)?;
     let current = version(current).ok_or_else(invalid)?;
     Ok((latest > current).then(|| tag.to_owned()))
@@ -600,30 +600,33 @@ mod tests {
     }
     #[test]
     fn compares_versions_numerically_and_never_downgrades() {
-        for tag in ["v0.6.40", "0.10.0", "v1.0.0"] {
+        for tag in ["personal-v0.6.40-1", "personal-v0.10.0-1", "personal-v1.0.0-1"] {
             assert_eq!(parse_release(&release(tag), "0.6.39"), Ok(Some(tag.into())));
         }
-        for tag in ["v0.6.39", "v0.6.9", "v0.5.99"] {
+        for tag in ["personal-v0.6.39-0", "personal-v0.6.9-9", "personal-v0.5.99-99"] {
             assert_eq!(parse_release(&release(tag), "0.6.39"), Ok(None));
         }
+        assert_eq!(parse_release(&release("personal-v0.6.65-2"),"personal-v0.6.65-1"),Ok(Some("personal-v0.6.65-2".into())));
+        assert_eq!(parse_release(&release("personal-v0.6.65-1"),"personal-v0.6.65-2"),Ok(None));
+        assert_eq!(parse_release(&release("personal-v0.6.65-1794900000"),"personal-v0.6.65-2"),Ok(Some("personal-v0.6.65-1794900000".into())));
     }
     #[test]
     fn rejects_invalid_and_unpublished_releases() {
-        for tag in ["", "latest", "v1.0", "v1.0.0.1", "v1.0.0-beta", "v+1.0.0"] {
+        for tag in ["", "latest", "v1.0.0", "personal-v1.0", "personal-v1.0.0.1-1", "personal-v1.0.0-beta", "personal-v+1.0.0-1", "personal-v1.0.0-", "personal-v1.0.0-1/evil"] {
             assert!(parse_release(&release(tag), "0.6.39").is_err());
         }
         for field in ["draft", "prerelease"] {
-            let mut value = release("v1.0.0"); value[field] = true.into();
+            let mut value = release("personal-v1.0.0-1"); value[field] = true.into();
             assert!(parse_release(&value, "0.6.39").is_err());
         }
         assert!(parse_release(&serde_json::json!({}), "0.6.39").is_err());
     }
     #[test]
     fn only_matching_verified_windows_package_can_install() {
-        let mut value = release("v0.6.40");
+        let mut value = release("personal-v0.6.40-1");
         value["body"] = "更新说明".into();
-        value["assets"] = serde_json::json!([{"name":"Daozai-v0.6.40-windows-x64.zip",
-            "browser_download_url":format!("{REPOSITORY}/releases/download/v0.6.40/Daozai-v0.6.40-windows-x64.zip"),
+        value["assets"] = serde_json::json!([{"name":"DaozaiPersonal-v0.6.40-windows-x64.zip",
+            "browser_download_url":format!("{REPOSITORY}/releases/download/personal-v0.6.40-1/DaozaiPersonal-v0.6.40-windows-x64.zip"),
             "size":123,"digest":format!("sha256:{}", "a".repeat(64))}]);
         let parsed = release_info(&value, "0.6.39").unwrap().unwrap();
         assert!(parsed.package.is_some()); assert_eq!(parsed.notes, "更新说明");
