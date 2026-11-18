@@ -35,9 +35,23 @@ fn setup()->H {
     h.app.show_page(TODO_PAGE);h.hover(H::local(250.0,70.0),1.0);h.click(H::local(79.0,109.0));
     assert!(h.app.feishu.editing.is_some());assert!(h.app.todos.items.is_empty());
     assert!(h.app.is_editing(),"Cloud text entry must enable the native keyboard focus mode");
+    assert!(h.shapes.iter().any(|s|matches!(&s.shape,egui::Shape::Text(t)if t.galley.text().contains("要做点什么？回车保存"))));
     h.frame(vec![egui::Event::Text("输入测试".into())]);
     assert!(h.shapes.iter().any(|s|matches!(&s.shape,egui::Shape::Text(t)if t.galley.text().contains("输入测试"))));
+    assert!(!h.shapes.iter().any(|s|matches!(&s.shape,egui::Shape::Text(t)if t.galley.text().contains("截止："))));
+    h.frame(vec![egui::Event::Key{key:egui::Key::Enter,physical_key:None,pressed:true,repeat:false,modifiers:Default::default()}]);
+    assert!(h.app.feishu.submitted.is_some(),"Enter must save the single-line cloud task");
     h.app.cancel_edit();assert!(h.app.feishu.editing.is_none());
+}
+
+#[test] fn cloud_task_ime_confirmation_does_not_submit(){
+    let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());let mut h=setup();
+    h.app.show_page(TODO_PAGE);h.hover(H::local(250.0,70.0),1.0);h.click(H::local(79.0,109.0));
+    h.frame(vec![egui::Event::Ime(egui::ImeEvent::Enabled)]);
+    let enter=||egui::Event::Key{key:egui::Key::Enter,physical_key:None,pressed:true,repeat:false,modifiers:Default::default()};
+    h.frame(vec![enter(),egui::Event::Ime(egui::ImeEvent::Commit("中文待办".into())),egui::Event::Ime(egui::ImeEvent::Disabled)]);
+    assert!(h.app.feishu.submitted.is_none(),"IME confirmation must only commit the Chinese text");
+    h.frame(vec![enter()]);assert!(h.app.feishu.submitted.is_some());
 }
 
 #[test] fn queued_calendar_creation_stays_visible_without_a_cloud_response(){
@@ -56,18 +70,26 @@ fn personal_ui_gallery(){
     h.app.calendar.view.day=chrono::NaiveDate::from_ymd_opt(2026,10,28).unwrap();h.app.calendar.view.month=chrono::NaiveDate::from_ymd_opt(2026,10,1).unwrap();
     let env=Env{today:"2026-10-28".into(),clock:"09:41:00".into(),..Default::default()};
     let mut raster=crate::preview_raster::Raster::new(419,216);
-    for scene in ["todo","calendar","calendar-editor","settings"]{
+    for scene in ["todo","calendar","calendar-editor","settings","todo-input"]{
+        if scene=="todo-input"{h.app.cancel_edit();h.app.show_page(TODO_PAGE);h.hover(H::local(250.0,70.0),1.0);h.click(H::local(79.0,109.0));}
         if scene=="calendar-editor"{h.app.open_calendar_editor(None);}
         let (width,height)=if scene=="settings"{(620,790)}else{(419,216)};
         raster.w=width;raster.h=height;raster.buf.resize(width*height,[0.0;4]);
+        if scene=="todo-input"{
+            // H's interaction frames already consumed glyph uploads; restore the full atlas.
+            let mut delta=egui::TexturesDelta::default();
+            delta.set.push((egui::TextureId::default(),egui::epaint::ImageDelta::full(h.ctx.fonts(|fonts|fonts.image()),egui::TextureOptions::LINEAR)));
+            raster.update_textures(&delta);
+        }
         for frame in 0..4 {
             let rect=Rect::from_min_size(Pos2::ZERO,egui::vec2(width as f32,height as f32));
             let out=h.ctx.run(egui::RawInput{screen_rect:Some(rect),..Default::default()},|ctx|{
                 egui::CentralPanel::default().frame(egui::Frame::NONE.fill(egui::Color32::BLACK)).show(ctx,|ui|{
                     if scene=="settings"{h.app.feishu_settings(ui);}else{
                         let c=Card::new(ui,Pos2::ZERO,rect);
-                        match scene{"todo"=>h.app.page_feishu_todo(&c,&env),"calendar"=>h.app.page_calendar(&c,&env),_=>h.app.draw_calendar_editor(&c)}
+                        match scene{"todo"|"todo-input"=>h.app.page_feishu_todo(&c,&env),"calendar"=>h.app.page_calendar(&c,&env),_=>h.app.draw_calendar_editor(&c)}
                     }
+                    if scene=="todo-input"{h.app.feishu_task_inputs(ui,Pos2::ZERO,&mut vec![]);}
                 });
             });
             raster.update_textures(&out.textures_delta);

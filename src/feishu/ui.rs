@@ -3,11 +3,16 @@ use super::worker::Command;
 use crate::{app::{App,Cmd,Env},paint::{self,Card,H},theme::{self,W}};
 use eframe::egui::{self,Color32};
 
-pub(crate) struct TaskDraft {guid:String,base:Value,title:String,due:String,all_day:bool,error:String,focused:bool}
+pub(crate) struct TaskDraft {guid:String,base:Value,title:String,error:String,focused:bool}
 impl TaskDraft {
     fn new(task:Option<&Value>)->Self{
-        let due=task.and_then(|t|text(&t["due"],"timestamp").parse::<i64>().ok()).and_then(chrono::DateTime::from_timestamp_millis).map(|d|d.with_timezone(&Local).format("%Y-%m-%d %H:%M").to_string()).unwrap_or_default();
-        Self{guid:task.map(|t|text(t,"guid").into()).unwrap_or_default(),base:task.map(task_fields).unwrap_or(Value::Null),title:task.map(|t|text(t,"summary").into()).unwrap_or_default(),due,all_day:task.is_some_and(|t|t["due"]["is_all_day"]==true),error:String::new(),focused:false}
+        Self{guid:task.map(|t|text(t,"guid").into()).unwrap_or_default(),base:task.map(task_fields).unwrap_or(Value::Null),title:task.map(|t|text(t,"summary").into()).unwrap_or_default(),error:String::new(),focused:false}
+    }
+    fn change(&self)->Result<Change,String>{
+        if self.title.trim().is_empty(){return Err("请填写内容".into());}
+        let mut patch=if self.guid.is_empty(){json!({})}else{self.base.clone()};
+        patch["summary"]=json!(self.title.trim());
+        Ok(Change::new(if self.guid.is_empty(){"task-create"}else{"task-update"},&self.guid,"",self.base.clone(),patch))
     }
 }
 impl App {
@@ -98,26 +103,25 @@ impl App {
         let hint=if self.feishu.error.is_empty(){&self.feishu.status}else{&self.feishu.error};
         c.centered_text(42.0,18.0,&c.fit(hint,8.0,W::Regular,330.0),8.0,W::Regular,theme::GRAY,H::Left);
         let writable=self.feishu.store.config.writes && !self.feishu.store.account.is_empty();
-        if self.feishu.editing.is_some(){
-            c.fill(196.0,31.0,181.0,93.0,12.0,theme::CARD);
-            c.text(202.0,32.0,"内容",8.0,W::Regular,theme::GRAY,H::Left);
-            c.text(202.0,63.0,"截止：年-月-日 时:分（可留空）",7.3,W::Regular,theme::GRAY,H::Left);
-            let (cancel,b)=paint::capsule(c,42.0,96.0,65.0,26.0,"feishu-task-cancel",theme::BTN,theme::BTN_HOVER);b.centered_text(74.5,109.0,"取消",10.0,W::Regular,theme::WHITE,H::Center);
-            let (save,b)=paint::capsule(c,116.0,96.0,70.0,26.0,"feishu-task-save",theme::BTN,theme::BTN_HOVER);b.centered_text(151.0,109.0,"保存到飞书",9.5,W::Regular,theme::BLUE,H::Center);
-            if let Some(d)=&self.feishu.editing{c.centered_text(202.0,116.0,&c.fit(&d.error,7.3,W::Regular,170.0),7.3,W::Regular,theme::RED,H::Left);}
-            if cancel.clicked(){self.feishu.editing=None;}else if save.clicked(){self.save_feishu_task();}return;
-        }
-        let (add,b)=paint::capsule(c,42.0,96.0,74.0,26.0,"feishu-task-add",theme::BTN,theme::BTN_HOVER);b.centered_text(79.0,109.0,"＋ 加一个",10.0,W::Regular,theme::WHITE,H::Center);
+        let editing=self.feishu.editing.is_some();
+        let (add,b)=paint::capsule(c,42.0,96.0,74.0,26.0,"feishu-task-add",theme::BTN,theme::BTN_HOVER);b.centered_text(79.0,109.0,if editing{"取消"}else{"＋ 加一个"},10.0,W::Regular,theme::WHITE,H::Center);
         let (refresh,b)=paint::capsule(c,124.0,96.0,62.0,26.0,"feishu-task-refresh",theme::BTN,theme::BTN_HOVER);b.centered_text(155.0,109.0,"刷新",10.0,W::Regular,theme::WHITE,H::Center);
-        if add.clicked(){if writable{self.feishu.editing=Some(TaskDraft::new(None));}else{self.settings_tab=4;self.open_settings();}}
+        if add.clicked(){if editing{self.feishu.editing=None;}else if writable{self.feishu.editing=Some(TaskDraft::new(None));}else{self.settings_tab=4;self.open_settings();}}
         if refresh.clicked(){self.feishu_send(Command::Tasks);}
         c.fill(196.0,31.0,181.0,93.0,12.0,theme::CARD);
-        if tasks.is_empty(){c.centered_text(286.0,75.0,"飞书中暂无待办",10.0,W::Regular,theme::GRAY,H::Center);return;}
+        let draft=self.feishu.editing.as_ref();let editing=draft.is_some();
+        if let Some(d)=draft{
+            c.fill(203.0,36.0,167.0,20.0,7.0,Color32::from_rgb(34,34,38));
+            c.stroke(203.0,36.0,167.0,20.0,7.0,1.0,paint::alpha(theme::BLUE,0.7));
+            if d.guid.is_empty(){paint::plus(c,212.0,46.0,5.0,theme::BLUE,Color32::BLACK);}else{paint::pencil(c,212.0,46.0,9.0,theme::BLUE);}
+        }
+        if tasks.is_empty()&&!editing{c.centered_text(286.0,75.0,"飞书中暂无待办",10.0,W::Regular,theme::GRAY,H::Center);return;}
         let mut tasks=tasks;tasks.sort_by_key(|t|text(t,"completed_at").parse::<i64>().unwrap_or(0)>0);
+        if let Some(d)=draft{tasks.retain(|t|text(t,"guid")!=d.guid);}
         if c.hit(196.0,31.0,181.0,93.0,"feishu-task-scroll").hovered(){let scroll=c.ui.input(|i|i.smooth_scroll_delta.y);if scroll.abs()>1.0{if scroll<0.0{self.todo_first=(self.todo_first+1).min(total.saturating_sub(3));}else{self.todo_first=self.todo_first.saturating_sub(1);}}}
         self.todo_first=self.todo_first.min(total.saturating_sub(3));
-        for (i,t) in tasks.iter().skip(self.todo_first).take(3).enumerate(){
-            let y=46.0+i as f32*23.0;let guid=text(t,"guid");let checked=text(t,"completed_at").parse::<i64>().unwrap_or(0)>0;
+        for (i,t) in tasks.iter().skip(self.todo_first).take(if editing{2}else{3}).enumerate(){
+            let y=46.0+(i+usize::from(editing)) as f32*23.0;let guid=text(t,"guid");let checked=text(t,"completed_at").parse::<i64>().unwrap_or(0)>0;
             let pending=t["daozai_pending"]==true;
             let editable=writable && task_writable(t,&self.feishu.store.account) && !pending;
             c.ring(211.0,y,5.0,1.2,if checked{theme::GREEN}else{theme::GRAY});if checked{paint::check(c,211.0,y,6.0,1.0,1.0,theme::GREEN);}
@@ -127,31 +131,28 @@ impl App {
                 let base=task_fields(t);let mut patch=base.clone();patch["completed_at"]=json!(if checked{"0".into()}else{chrono::Utc::now().timestamp_millis().to_string()});
                 self.feishu_send(Command::Queue(Change::new("task-update",guid,"",base,patch)));
             }
-            let hit=c.hit(222.0,y-10.0,152.0,21.0,("feishu-edit",guid)).on_hover_text(format!("{}\n{}",text(t,"summary"),if pending{"已有待同步修改"}else{"点击编辑内容和截止时间"}));
+            let hit=c.hit(222.0,y-10.0,152.0,21.0,("feishu-edit",guid)).on_hover_text(format!("{}\n{}",text(t,"summary"),if pending{"已有待同步修改"}else{"点击编辑内容，回车保存"}));
             if hit.clicked()&&editable{self.feishu.editing=Some(TaskDraft::new(Some(t)));}
         }
-        c.centered_text(370.0,119.0,&format!("共 {total} 项 · 待同步 {}",self.feishu.store.queue.len()),7.0,W::Regular,theme::GRAY,H::Right);
+        if let Some(d)=self.feishu.editing.as_ref().filter(|d|!d.error.is_empty()){
+            c.centered_text(370.0,119.0,&c.fit(&d.error,7.0,W::Regular,170.0),7.0,W::Regular,theme::RED,H::Right);
+        }else{c.centered_text(370.0,119.0,&format!("共 {total} 项 · 待同步 {}",self.feishu.store.queue.len()),7.0,W::Regular,theme::GRAY,H::Right);}
         let _=env;
     }
     pub(crate) fn feishu_task_inputs(&mut self,ui:&mut egui::Ui,origin:egui::Pos2,cmds:&mut Vec<Cmd>){
         let Some(d)=self.feishu.editing.as_mut() else{return;};
-        let title=ui.put(egui::Rect::from_min_size(origin+egui::vec2(202.0,36.0),egui::vec2(168.0,20.0)),egui::TextEdit::singleline(&mut d.title).frame(false).font(theme::font(10.5,W::Regular)).text_color(theme::WHITE));
-        ui.put(egui::Rect::from_min_size(origin+egui::vec2(202.0,69.0),egui::vec2(168.0,20.0)),egui::TextEdit::singleline(&mut d.due).frame(false).font(theme::font(9.0,W::Regular)).text_color(theme::WHITE));
+        let title=ui.put(egui::Rect::from_min_size(origin+egui::vec2(222.0,37.0),egui::vec2(142.0,18.0)),
+            egui::TextEdit::singleline(&mut d.title).id(egui::Id::new("feishu-task-input")).frame(false).margin(egui::Margin::ZERO)
+                .font(theme::font(theme::size::BODY,W::Regular)).text_color(theme::WHITE)
+                .hint_text(egui::RichText::new("要做点什么？回车保存").color(theme::DIM).font(theme::font(theme::size::BODY,W::Regular))));
         if !d.focused{d.focused=true;title.request_focus();cmds.push(Cmd::Focus);}
+        if (title.has_focus()||title.lost_focus()) && ui.input(|i|i.key_pressed(egui::Key::Enter)){self.save_feishu_task();}
     }
     fn save_feishu_task(&mut self){
         if self.feishu.submitted.is_some(){return;}
         let Some(mut d)=self.feishu.editing.take() else{return;};
         let result=(||{
-            if d.title.trim().is_empty(){return Err("请填写内容".to_string());}
-            let due=if d.due.trim().is_empty(){Value::Null}else{
-                let dt=chrono::NaiveDateTime::parse_from_str(d.due.trim(),"%Y-%m-%d %H:%M").map_err(|_|"时间格式：2026-11-16 18:30".to_string())?;
-                let dt=Local.from_local_datetime(&dt).single().ok_or("该时间有歧义，请调整")?;
-                json!({"timestamp":dt.timestamp_millis().to_string(),"is_all_day":d.all_day})
-            };
-            let mut patch=if d.guid.is_empty(){json!({"summary":d.title.trim(),"due":due})}else{let mut v=d.base.clone();v["summary"]=json!(d.title.trim());v["due"]=due;v};
-            if d.guid.is_empty()&&patch["due"].is_null(){patch.as_object_mut().unwrap().remove("due");}
-            let change=Change::new(if d.guid.is_empty(){"task-create"}else{"task-update"},&d.guid,"",d.base.clone(),patch);
+            let change=d.change()?;
             self.feishu.submitted=Some((change.id.clone(),false));self.feishu_send(Command::Queue(change));Ok::<_,String>(())
         })();
         if let Err(e)=result{d.error=e;}else{d.error="正在保存草稿…".into();}
@@ -159,3 +160,17 @@ impl App {
     }
 }
 fn config_enabled(store:&Store)->bool {store.config.enabled&&store.config.calendar}
+
+#[cfg(test)] mod tests{
+    use super::*;
+    #[test] fn new_task_defaults_to_no_deadline(){
+        let mut d=TaskDraft::new(None);d.title="  记一件事  ".into();
+        let q=d.change().unwrap();assert_eq!(q.kind,"task-create");assert_eq!(q.patch,json!({"summary":"记一件事"}));
+    }
+    #[test] fn title_edit_preserves_existing_deadline_exactly(){
+        let task=json!({"guid":"a","summary":"原内容","due":{"timestamp":"1794990123456","is_all_day":true},"completed_at":"0"});
+        let mut d=TaskDraft::new(Some(&task));d.title="新内容".into();
+        let q=d.change().unwrap();assert_eq!(q.patch["due"],task["due"]);
+        assert_eq!(checked_patch(&q.base,&q.patch,&q.base).unwrap(),json!({"summary":"新内容"}));
+    }
+}

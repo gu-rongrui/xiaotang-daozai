@@ -1643,7 +1643,7 @@ impl App {
 
     pub fn filter_todo_input(&mut self,input:&mut egui::RawInput) {
         self.todo_ime_frame=false;
-        if !self.adding && self.editing.is_none(){self.todo_ime_active=false;return;}
+        if !self.adding && self.editing.is_none() && self.feishu.editing.is_none(){self.todo_ime_active=false;return;}
         self.todo_ime_frame=self.todo_ime_active || input.events.iter().any(|event|matches!(event,egui::Event::Ime(egui::ImeEvent::Enabled|egui::ImeEvent::Preedit(_)|egui::ImeEvent::Commit(_))));
         for event in &input.events {
             match event {
