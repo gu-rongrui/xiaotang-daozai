@@ -2,6 +2,16 @@
 param([switch]$EncryptedCache)
 $ErrorActionPreference = 'Stop'
 $project = Split-Path $PSScriptRoot -Parent
+$ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $project 'installer\update.ps1'),[ref]$null,[ref]$null)
+$readError=$ast.Find({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-UpdateReadError'},$true)
+if(-not $readError){throw 'Missing update read-error handler'}
+. ([scriptblock]::Create($readError.Extent.Text))
+foreach($code in @(225,226)){
+    $failure=[IO.IOException]::new('simulated security denial',(-2147024896+$code))
+    $message=Get-UpdateReadError ([Reflection.TargetInvocationException]::new($failure))
+    if($message -notmatch '安全防护拦截' -or $message -match '版本不匹配'){throw "Security denial was reported as a version mismatch: $code"}
+    Write-Output "通过：security-read-error-$code"
+}
 $testRoot = Join-Path $project ('target\update-test-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $testRoot | Out-Null
 $oldLocal = $env:LOCALAPPDATA
@@ -23,7 +33,7 @@ try {
     $data = Join-Path $targetDir 'settings.json'
     Set-Content -LiteralPath $data -Value 'keep-user-data'
     Add-Type -AssemblyName System.IO.Compression.FileSystem
-    foreach ($case in @('success','inherited-shell','bad-hash','wrong-version','traversal','upstream-package')) {
+    foreach ($case in @('success','inherited-shell','bad-hash','wrong-version','missing-version','traversal','upstream-package')) {
         Remove-Item -LiteralPath (Join-Path $targetDir 'started.txt') -ErrorAction SilentlyContinue
         for ($attempt=0; ; $attempt++) {
             try { Set-Content -LiteralPath $target -Value 'previous-program'; break }
@@ -36,7 +46,10 @@ try {
         $zip = [IO.Compression.ZipFile]::Open($archive, [IO.Compression.ZipArchiveMode]::Create)
         $version = if ($case -eq 'wrong-version') {'9.8.8'} else {'9.8.7'}
         $entry = if ($case -eq 'traversal') {'../daozai.exe'} elseif ($case -eq 'upstream-package') {"Daozai-v$version-windows-x64/daozai.exe"} else {"DaozaiPersonal-v$version-windows-x64/daozai.exe"}
-        [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $fixture, $entry) | Out-Null
+        if($case -eq 'missing-version'){
+            $writer=[IO.StreamWriter]::new($zip.CreateEntry($entry).Open())
+            try{$writer.Write('MZ fixture without version information')}finally{$writer.Dispose()}
+        }else{[IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $fixture, $entry) | Out-Null}
         $zip.Dispose()
         Set-Content -LiteralPath (Join-Path $work 'version.txt') -Value $version
         $hash = if ($case -eq 'bad-hash') {'a' * 64} else {(Get-FileHash -LiteralPath $archive).Hash}
@@ -68,6 +81,10 @@ try {
             }
         } else {
             if ($code -eq 0 -or -not (Test-Path -LiteralPath (Join-Path $work 'error.txt'))) { throw "未拒绝无效更新：$case" }
+            if($case -eq 'missing-version'){
+                $message=Get-Content -LiteralPath (Join-Path $work 'error.txt') -Raw
+                if($message -notmatch '无法读取更新程序的版本信息' -or $message -match '版本不匹配'){throw 'Missing metadata was reported as a version mismatch'}
+            }
             if ((Get-FileHash -LiteralPath $target).Hash -ne $before) { throw '无效更新修改了原程序' }
         }
         if ((Get-Content -LiteralPath $data -Raw).Trim() -ne 'keep-user-data') { throw '用户数据被修改' }

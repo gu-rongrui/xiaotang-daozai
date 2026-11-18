@@ -17,6 +17,14 @@ function Assert-PlainPath([string]$PathToCheck) {
         $ancestor = Split-Path $ancestor -Parent
     }
 }
+function Get-UpdateReadError([Exception]$Failure) {
+    while ($Failure.InnerException) { $Failure = $Failure.InnerException }
+    $code = $Failure.HResult -band 0xffff
+    if ($code -in @(225,226)) {
+        return '更新程序被 Windows 安全防护拦截，当前版本已保留。请查看 Windows 安全中心的保护历史记录，等待安全复核后再更新。'
+    }
+    return '无法读取更新程序，文件可能已被隔离或没有访问权限。当前版本已保留，请查看 Windows 安全中心的保护历史记录。'
+}
 try {
     if (-not $workRoot.StartsWith($cacheRoot + '\', [StringComparison]::OrdinalIgnoreCase)) { throw '更新缓存目录无效。' }
     Assert-PlainPath $workRoot
@@ -35,8 +43,15 @@ try {
         if ($entries.Count -ne 1 -or $entries[0].Length -gt 200MB) { throw '更新包中缺少唯一的岛仔程序。' }
         [IO.Compression.ZipFileExtensions]::ExtractToFile($entries[0], $staged)
     } finally { $zip.Dispose() }
-    $actual = [Diagnostics.FileVersionInfo]::GetVersionInfo($staged).FileVersion
-    if ($actual -ne $version -and $actual -ne "$version.0") { throw '安装包版本不匹配。' }
+    try {
+        # FileVersionInfo may return empty metadata when security software denies access.
+        # Verify readability before interpreting missing metadata as a version mismatch.
+        $probe = [IO.File]::OpenRead($staged)
+        try { $null = $probe.ReadByte() } finally { $probe.Dispose() }
+        $actual = [Diagnostics.FileVersionInfo]::GetVersionInfo($staged).FileVersion
+    } catch { throw (Get-UpdateReadError $_.Exception) }
+    if ([string]::IsNullOrWhiteSpace($actual)) { throw '无法读取更新程序的版本信息，文件可能被安全软件拦截或缺少版本资源。当前版本已保留。' }
+    if ($actual -ne $version -and $actual -ne "$version.0") { throw "安装包版本不匹配（需要 $version，读取到 $actual）。当前版本已保留。" }
     Set-Content -LiteralPath (Join-Path $workRoot 'ready') -Value 'ok'
     if ($ParentProcessId -gt 0) {
         $parent = Get-Process -Id $ParentProcessId -ErrorAction SilentlyContinue
@@ -75,7 +90,7 @@ try {
 } catch {
     $message = $_.Exception.Message
     if ($replaced -and (Test-Path -LiteralPath $backup)) { [IO.File]::Copy($backup, $target, $true) }
-    if (Test-Path -LiteralPath $staged) { Remove-Item -LiteralPath $staged -Force }
+    if (Test-Path -LiteralPath $staged) { Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue }
     if (-not $exited) {
         if ($workRoot.StartsWith($cacheRoot + '\', [StringComparison]::OrdinalIgnoreCase)) {
             [IO.File]::WriteAllText((Join-Path $workRoot 'error.txt'), $message)
