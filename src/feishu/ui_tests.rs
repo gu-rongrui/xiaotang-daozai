@@ -71,16 +71,15 @@ fn personal_ui_gallery(){
     let env=Env{today:"2026-10-28".into(),clock:"09:41:00".into(),..Default::default()};
     let mut raster=crate::preview_raster::Raster::new(419,216);
     for scene in ["todo","calendar","calendar-editor","settings","todo-input"]{
-        if scene=="todo-input"{h.app.cancel_edit();h.app.show_page(TODO_PAGE);h.hover(H::local(250.0,70.0),1.0);h.click(H::local(79.0,109.0));}
+        if scene=="todo-input"{
+            h.app.cancel_edit();h.app.show_page(TODO_PAGE);h.hover(H::local(250.0,70.0),1.0);h.click(H::local(79.0,109.0));
+            // A fresh context lets the raster receive every glyph upload for this scene.
+            let mut fresh=setup();fresh.app.feishu.editing=h.app.feishu.editing.take();h=fresh;
+            raster=crate::preview_raster::Raster::new(419,216);
+        }
         if scene=="calendar-editor"{h.app.open_calendar_editor(None);}
         let (width,height)=if scene=="settings"{(620,790)}else{(419,216)};
         raster.w=width;raster.h=height;raster.buf.resize(width*height,[0.0;4]);
-        if scene=="todo-input"{
-            // H's interaction frames already consumed glyph uploads; restore the full atlas.
-            let mut delta=egui::TexturesDelta::default();
-            delta.set.push((egui::TextureId::default(),egui::epaint::ImageDelta::full(h.ctx.fonts(|fonts|fonts.image()),egui::TextureOptions::LINEAR)));
-            raster.update_textures(&delta);
-        }
         for frame in 0..4 {
             let rect=Rect::from_min_size(Pos2::ZERO,egui::vec2(width as f32,height as f32));
             let out=h.ctx.run(egui::RawInput{screen_rect:Some(rect),..Default::default()},|ctx|{
