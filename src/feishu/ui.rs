@@ -50,12 +50,15 @@ impl App {
         }
     }
     pub(crate) fn feishu_settings(&mut self,ui:&mut egui::Ui){
-        ui.group(|ui|{
-            ui.strong("飞书个人同步 · API");
+        use crate::extras::{setting_row,settings_card,settings_label};
+        settings_label(ui,"飞书连接与同步");
+        settings_card(ui,|ui|{
             let mut config=self.feishu.config_draft.clone().unwrap_or_else(||self.feishu.store.config.clone());
-            ui.checkbox(&mut config.enabled,"连接现有飞书 CLI 登录");
-            ui.horizontal(|ui|{ui.checkbox(&mut config.tasks,"待办使用飞书");ui.checkbox(&mut config.calendar,"日程使用飞书 API");});
-            ui.checkbox(&mut config.writes,"允许在岛仔新增和修改飞书内容");
+            setting_row(ui,"连接飞书","使用官方 CLI 已登录的个人账号，日程与待办共用此连接",&mut config.enabled);
+            ui.separator();
+            setting_row(ui,"同步待办","读取飞书默认的“我负责的”任务",&mut config.tasks);
+            setting_row(ui,"同步日程","读取下方选中的飞书日历，无需填写 CalDAV 账号",&mut config.calendar);
+            setting_row(ui,"允许新增和修改","在岛仔保存的更改及时同步到飞书",&mut config.writes);
             ui.small("首次连接只读取；开启云端写入后，保存操作进入本机队列。已有本地数据不会自动上传。");
             ui.horizontal(|ui|{ui.label("后台刷新（分钟）");ui.add(egui::DragValue::new(&mut config.interval_minutes).range(15..=1440));});
             ui.horizontal(|ui|{ui.label("本机每月请求预算");ui.add(egui::DragValue::new(&mut config.monthly_budget).range(100..=1_000_000));});
