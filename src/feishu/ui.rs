@@ -101,11 +101,11 @@ impl App {
         c.text(42.0,61.0,&format!("{done}/{total}"),theme::size::HERO,W::Bold,theme::WHITE,H::Left);
         c.text(42.0,78.0,"飞书 · 我负责的",theme::size::SMALL,W::Regular,theme::GRAY,H::Left);
         let hint=if self.feishu.error.is_empty(){&self.feishu.status}else{&self.feishu.error};
-        c.centered_text(42.0,18.0,&c.fit(hint,8.0,W::Regular,330.0),8.0,W::Regular,theme::GRAY,H::Left);
         let writable=self.feishu.store.config.writes && !self.feishu.store.account.is_empty();
         let editing=self.feishu.editing.is_some();
         let (add,b)=paint::capsule(c,42.0,96.0,74.0,26.0,"feishu-task-add",theme::BTN,theme::BTN_HOVER);b.centered_text(79.0,109.0,if editing{"取消"}else{"＋ 加一个"},10.0,W::Regular,theme::WHITE,H::Center);
         let (refresh,b)=paint::capsule(c,124.0,96.0,62.0,26.0,"feishu-task-refresh",theme::BTN,theme::BTN_HOVER);b.centered_text(155.0,109.0,"刷新",10.0,W::Regular,theme::WHITE,H::Center);
+        let refresh = refresh.on_hover_text(hint.as_str());
         if add.clicked(){if editing{self.feishu.editing=None;}else if writable{self.feishu.editing=Some(TaskDraft::new(None));}else{self.settings_tab=4;self.open_settings();}}
         if refresh.clicked(){self.feishu_send(Command::Tasks);}
         c.fill(196.0,31.0,181.0,93.0,12.0,theme::CARD);
@@ -125,13 +125,32 @@ impl App {
             let pending=t["daozai_pending"]==true;
             let editable=writable && task_writable(t,&self.feishu.store.account) && !pending;
             c.ring(211.0,y,5.0,1.2,if checked{theme::GREEN}else{theme::GRAY});if checked{paint::check(c,211.0,y,6.0,1.0,1.0,theme::GREEN);}
-            c.centered_text(223.0,y,&c.fit(text(t,"summary"),10.0,W::Regular,119.0),10.0,W::Regular,if checked{theme::GRAY}else{theme::WHITE},H::Left);
-            c.centered_text(361.0,y,if !text(t,"daozai_blocked").is_empty(){"冲突"}else if pending{"待同步"}else if editable{"编辑"}else{"只读"},7.5,W::Regular,theme::BLUE,H::Center);
+            let title_x = 223.0;
+            let row_right = 370.0;
+            let due_size = 8.0;
+            let due = task_due_label(t);
+            let title_width = due.as_ref().map_or(row_right - title_x, |label| {
+                row_right - title_x - c.text_w(label, due_size, W::Regular) - 8.0
+            });
+            let title = c.fit(text(t, "summary"), 10.0, W::Regular, title_width);
+            c.centered_text(title_x, y, &title, 10.0, W::Regular, if checked { theme::GRAY } else { theme::WHITE }, H::Left);
+            if let Some(label) = &due {
+                c.centered_text(row_right, y, label, due_size, W::Regular, theme::GRAY, H::Right);
+            }
             if c.hit(201.0,y-9.0,18.0,18.0,("feishu-toggle",guid)).clicked()&&editable{
                 let base=task_fields(t);let mut patch=base.clone();patch["completed_at"]=json!(if checked{"0".into()}else{chrono::Utc::now().timestamp_millis().to_string()});
                 self.feishu_send(Command::Queue(Change::new("task-update",guid,"",base,patch)));
             }
-            let hit=c.hit(222.0,y-10.0,152.0,21.0,("feishu-edit",guid)).on_hover_text(format!("{}\n{}",text(t,"summary"),if pending{"已有待同步修改"}else{"点击编辑内容，回车保存"}));
+            let row_hint = if !text(t, "daozai_blocked").is_empty() {
+                "同步冲突，详情见设置"
+            } else if pending {
+                "已有待同步修改"
+            } else if editable {
+                "点击编辑内容，回车保存"
+            } else {
+                "只读"
+            };
+            let hit=c.hit(222.0,y-10.0,152.0,21.0,("feishu-edit",guid)).on_hover_text(format!("{}\n{row_hint}",text(t,"summary")));
             if hit.clicked()&&editable{self.feishu.editing=Some(TaskDraft::new(Some(t)));}
         }
         if let Some(d)=self.feishu.editing.as_ref().filter(|d|!d.error.is_empty()){
@@ -158,6 +177,17 @@ impl App {
         if let Err(e)=result{d.error=e;}else{d.error="正在保存草稿…".into();}
         self.feishu.editing=Some(d);
     }
+}
+
+fn task_due_label(task: &Value) -> Option<String> {
+    let due = &task["due"];
+    let timestamp = due["timestamp"].as_i64().or_else(|| text(due, "timestamp").parse().ok())?;
+    if timestamp == 0 {
+        return None;
+    }
+    let date = chrono::DateTime::from_timestamp_millis(timestamp)?.with_timezone(&chrono::Local);
+    let format = if due["is_all_day"] == true { "%-m/%-d" } else { "%-m/%-d %H:%M" };
+    Some(date.format(format).to_string())
 }
 fn config_enabled(store:&Store)->bool {store.config.enabled&&store.config.calendar}
 

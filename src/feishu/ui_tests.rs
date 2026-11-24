@@ -30,6 +30,37 @@ fn setup()->H {
     assert!(h.app.calendar.local.is_empty());
 }
 
+#[test]
+fn cloud_task_due_times_render_without_crowding_the_header() {
+    use chrono::TimeZone;
+
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+    let mut h = setup();
+    let due = chrono::Local.with_ymd_and_hms(2026, 11, 28, 9, 0, 0).single().unwrap();
+    h.app.feishu.status = "已同步 · 2026-11-24 15:25".into();
+    h.app.feishu.store.tasks[0]["due"] = json!({
+        "timestamp": due.timestamp_millis().to_string(), "is_all_day": false
+    });
+    h.app.feishu.store.tasks.push(json!({
+        "guid": "all-day", "summary": "仅有日期的任务", "completed_at": "0",
+        "due": { "timestamp": due.timestamp_millis(), "is_all_day": true }
+    }));
+
+    h.app.show_page(TODO_PAGE);
+    h.hover(H::local(250.0, 70.0), 1.0);
+    let labels: Vec<_> = h.shapes.iter().filter_map(|shape| match &shape.shape {
+        egui::Shape::Text(text) => Some(text.galley.text()),
+        _ => None,
+    }).collect();
+    assert!(labels.contains(&"10月28日 周三"), "keep the center date");
+    assert!(labels.contains(&"11/28 09:00"));
+    assert!(labels.contains(&"11/28"));
+    assert!(labels.contains(&"阅读一篇文献"), "keep the task without a deadline");
+    assert!(!labels.iter().any(|label| label.contains("15:25")));
+    assert!(!labels.contains(&"编辑"));
+    assert!(!labels.contains(&"只读"));
+}
+
 #[test] fn cloud_task_editor_opens_in_original_panel(){
     let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());let mut h=setup();
     h.app.show_page(TODO_PAGE);h.hover(H::local(250.0,70.0),1.0);h.click(H::local(79.0,109.0));
